@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hmac
-
 import pandas as pd
 import streamlit as st
 
@@ -35,17 +33,11 @@ st.set_page_config(page_title="商品・部門分析アプリ", page_icon="M", l
 
 
 def main() -> None:
-    if not require_login():
-        st.stop()
-
     st.title("商品・部門分析アプリ")
     st.caption("もみじ屋専用。商品別売上・部門別売上だけを読み込む軽量分析アプリです。")
 
     with st.sidebar:
         st.header("条件")
-        if st.button("ログアウト", use_container_width=True):
-            st.session_state["authenticated"] = False
-            st.rerun()
         if st.button("キャッシュクリア", use_container_width=True):
             st.cache_data.clear()
             st.cache_resource.clear()
@@ -125,50 +117,6 @@ def main() -> None:
         "注意: 商品名・商品コード・部門名の変更があると別商品/別部門として扱われる場合があります。"
         "原価が空欄または0の場合、粗利関連は参考値です。"
     )
-
-
-def require_login() -> bool:
-    if st.session_state.get("authenticated"):
-        return True
-
-    password_candidates = _auth_passwords()
-    if not password_candidates:
-        st.title("商品・部門分析アプリ")
-        st.error("アプリ用パスワードが未設定です。`.streamlit/secrets.toml` の [auth] を設定してください。")
-        return False
-
-    st.title("商品・部門分析アプリ")
-    st.subheader("ログイン")
-    st.caption("許可された人だけが使用できます。管理者から共有されたパスワードを入力してください。")
-
-    entered_password = st.text_input("パスワード", type="password")
-    if st.button("ログイン", type="primary"):
-        if any(hmac.compare_digest(entered_password, password) for password in password_candidates):
-            st.session_state["authenticated"] = True
-            st.rerun()
-        else:
-            st.error("パスワードが違います。")
-    return False
-
-
-def _auth_passwords() -> list[str]:
-    try:
-        auth_config = st.secrets.get("auth", {})
-    except Exception:
-        return []
-
-    passwords: list[str] = []
-    single_password = auth_config.get("app_password") or auth_config.get("password")
-    if single_password:
-        passwords.append(str(single_password))
-
-    configured_passwords = auth_config.get("allowed_passwords", [])
-    if isinstance(configured_passwords, str):
-        passwords.append(configured_passwords)
-    else:
-        passwords.extend(str(password) for password in configured_passwords if password)
-
-    return [password for password in passwords if password]
 
 
 def _show_kpis(kpis: dict[str, float | str | None]) -> None:

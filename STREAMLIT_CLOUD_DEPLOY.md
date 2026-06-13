@@ -8,7 +8,6 @@
 - `requirements.txt` に必要ライブラリを入れています。
 - `.streamlit/secrets.toml` はGitHubに上げない設定にしています。
 - `.streamlit/secrets.toml.example` にCloudへ貼り付ける形式のサンプルを用意しています。
-- アプリ起動時にパスワードログインを出すようにしています。
 
 ## 人間が必要な作業
 
@@ -20,7 +19,6 @@
 4. GitHubリポジトリを選んでアプリを作成する
 5. Streamlit CloudのSecretsに `.streamlit/secrets.toml` の内容を貼り付ける
 6. デプロイ後のURLを社内メンバーへ共有する
-7. ログイン用パスワードを許可した人にだけ共有する
 
 ## GitHubへ上げてよいファイル
 
@@ -60,17 +58,14 @@ C:\Users\momij\OneDrive\ドキュメント\New project\momijiya-menu-analysis-ap
 
 - `[gcp_service_account]` または `[google_service_account]`
 - `[app]`
-- `[auth]`
 
 ## 公開後の確認
 
 1. Streamlit Cloudの公開URLを開く
-2. ログイン画面が出ることを確認
-3. ログイン用パスワードで入る
-4. 店舗を `神田店` にする
-5. 月を `2026-04` にする
-6. 部門分析、商品TOP分析、前月比・前年比ランキング、店舗間比較、改善候補を見る
+2. 店舗を `神田店` にする
+3. 月を `2026-04` にする
+4. 部門分析、商品TOP分析、前月比・前年比ランキング、店舗間比較、改善候補を見る
 
 ## 注意
 
-このアプリのパスワードログインは、社内共有向けの簡易認証です。公開URLを知っていてもパスワードがなければ中には入れませんが、パスワードを共有しすぎると誰でも入れる状態になります。退職者や不要な共有が出た場合は、Streamlit CloudのSecretsで `[auth] app_password` を変更してください。
+Streamlit Cloudで公開した場合、URLを知っている人はアプリを開けます。社内メンバーだけにURLを共有し、スプレッドシートやSecretsはGitHubへ入れないでください。

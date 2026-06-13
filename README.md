@@ -58,16 +58,11 @@ client_x509_cert_url = "your-cert-url"
 
 [app]
 spreadsheet_id = "1bBsJxUtDSTk7Qkfn_Q2tKKVo-0AL_aFCkivalZTtGWc"
-
-[auth]
-app_password = "change-this-password"
 ```
 
 サービスアカウントのメールアドレスを対象スプレッドシートに閲覧者として共有してください。
 
 既存の売上分析アプリで使っているsecretsが `[gcp_service_account]` という名前の場合も、このアプリは読み込めます。新規に設定する場合は `[google_service_account]` を推奨します。
-
-`[auth]` の `app_password` は、アプリを開く人にだけ共有するログイン用パスワードです。Googleの秘密鍵とは別のものです。Streamlit Cloudに公開する場合も、Cloud側のSecretsに同じ `[auth]` を設定してください。
 
 ## ローカル実行方法
 
