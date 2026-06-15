@@ -658,21 +658,18 @@ def _food_drink_chart_data(mix: pd.DataFrame) -> pd.DataFrame:
 def _show_food_drink_store_pies(mix: pd.DataFrame) -> None:
     if mix.empty:
         return
-    stores = mix["店舗名"].dropna().astype(str).tolist()
-    columns = st.columns(min(3, max(1, len(stores))))
-    for index, (_, row) in enumerate(mix.iterrows()):
+    for _, row in mix.iterrows():
         chart_data = pd.DataFrame(
             [
                 {"分類": "フード", "純売上": float(row.get("フード", 0) or 0)},
                 {"分類": "ドリンク", "純売上": float(row.get("ドリンク", 0) or 0)},
             ]
         )
-        with columns[index % len(columns)]:
-            pie_chart(chart_data, "分類", "純売上", f"{row['店舗名']}")
-            st.caption(
-                f"フード {format_share(row.get('フード比率', 0))} / "
-                f"ドリンク {format_share(row.get('ドリンク比率', 0))}"
-            )
+        pie_chart(chart_data, "分類", "純売上", f"{row['店舗名']}")
+        st.caption(
+            f"フード {format_share(row.get('フード比率', 0))} / "
+            f"ドリンク {format_share(row.get('ドリンク比率', 0))}"
+        )
 
 
 def _show_department_store_pies(department: pd.DataFrame) -> None:
@@ -680,11 +677,9 @@ def _show_department_store_pies(department: pd.DataFrame) -> None:
         return
     grouped = department.groupby(["店舗名", "部門名"], as_index=False)["純売上"].sum()
     stores = grouped["店舗名"].dropna().astype(str).unique().tolist()
-    columns = st.columns(min(3, max(1, len(stores))))
-    for index, store in enumerate(stores):
+    for store in stores:
         store_data = grouped[grouped["店舗名"] == store].sort_values("純売上", ascending=False)
-        with columns[index % len(columns)]:
-            top_share_pie(store_data, "部門名", "純売上", limit=8, title=f"{store}")
+        top_share_pie(store_data, "部門名", "純売上", limit=8, title=f"{store}")
 
 
 def _show_store_product_table(dataframe: pd.DataFrame) -> None:
