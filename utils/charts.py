@@ -41,7 +41,7 @@ def pie_chart(dataframe: pd.DataFrame, label_column: str, value_column: str, tit
         return
 
     spec = {
-        "mark": {"type": "arc", "innerRadius": 45, "stroke": "#111827"},
+        "mark": {"type": "arc", "outerRadius": 150, "stroke": "#111827", "strokeWidth": 1},
         "encoding": {
             "theta": {"field": value_column, "type": "quantitative"},
             "color": {
@@ -55,7 +55,7 @@ def pie_chart(dataframe: pd.DataFrame, label_column: str, value_column: str, tit
             ],
         },
         "view": {"stroke": None},
-        "height": 260,
+        "height": 360,
     }
     if title:
         spec["title"] = title
