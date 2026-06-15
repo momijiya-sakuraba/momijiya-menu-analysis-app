@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from utils.charts import department_sales_bar, department_share_bar, product_top_bar
+from utils.charts import department_sales_bar, department_share_bar, pie_chart, product_top_bar, top_share_pie
 from utils.metrics import (
     add_display_formats,
     format_number,
@@ -163,11 +163,15 @@ def show_overview(products: pd.DataFrame, departments: pd.DataFrame, store_name:
     cols[2].metric("部門数", format_number(department_count))
     cols[3].metric("商品分析", "デリバリー除外" if exclude_delivery else "デリバリー含む")
 
+    st.markdown("#### 今月の注目ポイント")
+    _show_decision_dashboard(products, departments, store_name, month, exclude_delivery)
+
     st.markdown("#### 今日見る順番")
-    st.write("1. 月次サマリーで店舗別の総額を確認")
-    st.write("2. 部門分析で売上構成と前月比を見る")
-    st.write("3. 商品TOP分析で主力商品を確認")
-    st.write("4. ABC分析で守る商品・伸ばす商品・確認候補を分ける")
+    st.write("1. 概要で今月の注目ポイントを確認")
+    st.write("2. 部門分析でフード/ドリンク比と部門構成を見る")
+    st.write("3. 商品TOP分析で主力商品とコース込み販売点数を確認")
+    st.write("4. コース分析・ランチ分析で、宴会/ランチの中身を確認")
+    st.write("5. 改善候補でおすすめ強化・整理確認・POP候補を決める")
 
     st.markdown("#### この画面の前提")
     st.write("月次サマリーと部門分析は売上全体を見るため、デリバリーも含めます。")
@@ -196,6 +200,71 @@ def show_monthly_summary(store_summary: pd.DataFrame) -> None:
     st.dataframe(display, use_container_width=True, hide_index=True)
 
 
+def _show_decision_dashboard(products: pd.DataFrame, departments: pd.DataFrame, store_name: str, month: str, exclude_delivery: bool) -> None:
+    mix = food_drink_mix(departments, store_name, month)["mix"]
+    lunch = lunch_analysis(products, store_name, month, exclude_delivery)
+    course = course_analysis(products, store_name, month, exclude_delivery)
+    top_sales = product_top(products, store_name, month, 5, "純売上", exclude_delivery)
+    quantity = product_quantity_with_course(products, store_name, month, 5, exclude_delivery)
+
+    drink_share = 0.0
+    food_share = 0.0
+    if not mix.empty:
+        total_sales = float(mix["合計純売上"].sum())
+        if total_sales:
+            drink_share = float(mix["ドリンク"].sum()) / total_sales
+            food_share = float(mix["フード"].sum()) / total_sales
+
+    lunch_sales = float(lunch["summary"]["純売上"].sum()) if not lunch["summary"].empty else 0.0
+    course_qty = float(course["summary"]["販売数量"].sum()) if not course["summary"].empty else 0.0
+    top_item = top_sales.iloc[0]["商品名"] if not top_sales.empty else "-"
+    quantity_item = quantity.iloc[0]["商品名"] if not quantity.empty else "-"
+
+    cols = st.columns(5)
+    cols[0].metric("フード比率", format_share(food_share))
+    cols[1].metric("ドリンク比率", format_share(drink_share))
+    cols[2].metric("ランチ売上", format_yen(lunch_sales))
+    cols[3].metric("コース販売数", format_number(course_qty))
+    cols[4].metric("数量主力", str(quantity_item))
+
+    st.markdown("##### 自動コメント")
+    for message in _decision_messages(store_name, drink_share, lunch_sales, course_qty, top_item, quantity_item):
+        st.write(f"- {message}")
+
+
+def _decision_messages(
+    store_name: str,
+    drink_share: float,
+    lunch_sales: float,
+    course_qty: float,
+    top_item: str,
+    quantity_item: str,
+) -> list[str]:
+    messages = []
+    if store_name == "神田店":
+        if drink_share < 0.25:
+            messages.append("神田店は夜飲み・ビール・会社利用を伸ばしたい店舗です。ドリンク比率が低めなら、夜の声かけとおすすめ導線を確認してください。")
+        messages.append("ボトルとアイスは神田店のみ販売として見ます。店舗限定の強みか、集計ノイズかを確認してください。")
+    elif store_name == "東池袋店":
+        messages.append("東池袋店は新店の成長管理が主目的です。飯田橋・神田で強い商品との差を店舗間比較で確認してください。")
+        if drink_share < 0.20:
+            messages.append("飲み利用への拡張余地があります。ドリンク比率とコース販売数をセットで確認してください。")
+    elif store_name == "飯田橋店":
+        messages.append("飯田橋店は既存客・宴会・コース・安定運用を確認します。定番主力の欠品と品質低下に注意してください。")
+    else:
+        messages.append("全店では、店舗ごとの差が大きい商品を横展開候補として確認してください。")
+
+    if lunch_sales > 0:
+        messages.append("ランチ売上があります。通常商品TOPとは分けて、ランチ内構成比と大盛り率を確認してください。")
+    if course_qty > 0:
+        messages.append("コース販売があります。単品販売数だけでなく、コース内販売点数を含めた仕込み量を確認してください。")
+    if top_item != "-":
+        messages.append(f"純売上TOPは「{top_item}」です。欠品・品質低下を防ぐ主力商品として確認してください。")
+    if quantity_item != "-" and quantity_item != top_item:
+        messages.append(f"販売点数では「{quantity_item}」が目立ちます。売上TOPと違う場合は、仕込み量・オペレーション負荷を確認してください。")
+    return messages
+
+
 def show_department_analysis(departments: pd.DataFrame, store_name: str, month: str) -> None:
     st.subheader("部門分析")
     st.caption(_store_hint(store_name))
@@ -208,6 +277,12 @@ def show_department_analysis(departments: pd.DataFrame, store_name: str, month: 
     st.markdown("#### フード/ドリンク比")
     st.caption("まず店舗ごとのフード売上とドリンク売上の比率を確認します。ボトルとアイスは神田店のみ販売の商品として、商品分析側で注意表示します。")
     if not mix_data["mix"].empty:
+        mix_chart = _food_drink_chart_data(mix_data["mix"])
+        chart_cols = st.columns([1, 2])
+        with chart_cols[0]:
+            pie_chart(mix_chart, "分類", "純売上", "フード/ドリンク比")
+        with chart_cols[1]:
+            st.caption("フード/ドリンク比は、夜飲み・宴会・ランチ偏重をざっくり見るための最初の指標です。")
         mix_display = add_display_formats(
             mix_data["mix"],
             {
@@ -233,6 +308,7 @@ def show_department_analysis(departments: pd.DataFrame, store_name: str, month: 
         department_sales_bar(department)
     with chart_cols[1]:
         st.markdown("#### 部門別構成比")
+        top_share_pie(department, "部門名", "純売上", limit=8, title="部門別構成比")
         department_share_bar(department)
 
     st.markdown("#### 確認ポイント")
@@ -300,6 +376,7 @@ def show_product_top(products: pd.DataFrame, store_name: str, month: str, limit:
                     f"(単品 {format_number(first['単品販売数量'])} / コース内 {format_number(first['コース内販売数量'])})"
                 )
                 st.caption("販売数量は、通常の単品販売数に、コース内訳として確認できる数量と、コース本体から確実に推定できる基本セット品を加算しています。")
+                top_share_pie(top, "商品名", "全体販売数量", limit=8, title="販売数量構成比")
                 st.dataframe(_format_product_quantity_with_course(top), use_container_width=True, hide_index=True)
                 continue
 
@@ -309,6 +386,8 @@ def show_product_top(products: pd.DataFrame, store_name: str, month: str, limit:
                 continue
             first = top.iloc[0]
             st.write(f"1位: **{first['商品名']}** / {label}: **{_format_top_value(first[sort_by], sort_by)}**")
+            if sort_by == "純売上":
+                top_share_pie(top, "商品名", "純売上", limit=8, title="売上構成比")
             product_top_bar(top, sort_by)
             st.dataframe(_format_product_top(top), use_container_width=True, hide_index=True)
 
@@ -335,6 +414,7 @@ def show_course_analysis(products: pd.DataFrame, store_name: str, month: str, li
 
     if not summary.empty:
         st.markdown("#### コース本体")
+        top_share_pie(summary, "コース区分", "純売上", limit=6, title="コース売上構成比")
         summary_display = add_display_formats(
             summary,
             {"販売数量": "number", "純売上": "yen", "取引数": "number", "平均単価": "yen"},
@@ -343,6 +423,7 @@ def show_course_analysis(products: pd.DataFrame, store_name: str, month: str, li
 
     if not components.empty:
         st.markdown("#### コース内で販売された商品点数")
+        top_share_pie(components, "商品名", "コース内販売数量", limit=8, title="コース内販売点数構成比")
         component_columns = [
             "順位",
             "店舗名",
@@ -383,6 +464,7 @@ def show_lunch_analysis(products: pd.DataFrame, store_name: str, month: str, lim
 
     if not items.empty:
         st.markdown("#### ランチ内構成比")
+        top_share_pie(items, "ランチ商品名", "純売上", limit=8, title="ランチ内売上構成比")
         item_columns = [
             "店舗名",
             "ランチ商品名",
@@ -424,6 +506,7 @@ def show_abc_analysis(products: pd.DataFrame, store_name: str, month: str, limit
     summary = abc.groupby("ABC区分", as_index=False).agg(商品数=("商品名", "count"), 純売上=("純売上", "sum"))
     total = summary["純売上"].sum()
     summary["構成比"] = summary["純売上"] / total if total else 0
+    pie_chart(summary, "ABC区分", "純売上", "ABC売上構成比")
     st.dataframe(
         add_display_formats(summary, {"純売上": "yen", "構成比": "share"}),
         use_container_width=True,
@@ -509,6 +592,10 @@ def show_store_comparison(
 def show_improvement_candidates(products: pd.DataFrame, store_name: str, month: str, limit: int, exclude_delivery: bool) -> None:
     st.subheader("改善候補")
     st.caption("自動で廃止とは判断しません。店長会議で確認するための候補として表示します。")
+    st.info(
+        "確認の優先順位: 1. 他店で強いのに自店で弱い商品、2. B商品で伸ばせそうなPOP候補、"
+        "3. C商品でも季節・店舗限定・コース内訳ではない整理確認候補。"
+    )
     if store_name == "全店":
         st.info("おすすめ強化候補は店舗別の弱い商品を見るため、店舗を1つ選ぶとより使いやすくなります。")
 
@@ -559,6 +646,17 @@ def _show_change_table(dataframe: pd.DataFrame, title: str) -> None:
         },
     )
     st.dataframe(display, use_container_width=True, hide_index=True)
+
+
+def _food_drink_chart_data(mix: pd.DataFrame) -> pd.DataFrame:
+    if mix.empty:
+        return pd.DataFrame(columns=["分類", "純売上"])
+    return pd.DataFrame(
+        [
+            {"分類": "フード", "純売上": float(mix["フード"].sum())},
+            {"分類": "ドリンク", "純売上": float(mix["ドリンク"].sum())},
+        ]
+    )
 
 
 def _show_store_product_table(dataframe: pd.DataFrame) -> None:
