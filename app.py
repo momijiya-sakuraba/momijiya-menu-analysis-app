@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from utils.charts import department_sales_bar, department_share_bar, pie_chart, product_top_bar, top_share_pie
+from utils.charts import pie_chart, top_share_pie
 from utils.metrics import (
     add_display_formats,
     format_number,
@@ -298,14 +298,9 @@ def show_department_analysis(departments: pd.DataFrame, store_name: str, month: 
             )
             st.dataframe(detail_display, use_container_width=True, hide_index=True)
 
-    chart_cols = st.columns(2)
-    with chart_cols[0]:
-        st.markdown("#### 部門別純売上")
-        department_sales_bar(department)
-    with chart_cols[1]:
-        st.markdown("#### 部門別構成比")
-        _show_department_store_pies(department)
-        department_share_bar(department)
+    st.markdown("#### 店舗別の部門別純売上・構成比")
+    st.caption("全店合算ではなく、店舗ごとに部門別純売上と構成比を確認します。")
+    _show_department_store_sections(department)
 
     st.markdown("#### 確認ポイント")
     top_department = department.iloc[0]
@@ -315,7 +310,7 @@ def show_department_analysis(departments: pd.DataFrame, store_name: str, month: 
     )
 
     display = add_display_formats(
-        department[
+        department.sort_values(["店舗名", "純売上"], ascending=[True, False])[
             [
                 "集計月",
                 "店舗名",
@@ -372,7 +367,7 @@ def show_product_top(products: pd.DataFrame, store_name: str, month: str, limit:
                     f"(単品 {format_number(first['単品販売数量'])} / コース内 {format_number(first['コース内販売数量'])})"
                 )
                 st.caption("販売数量は、通常の単品販売数に、コース内訳として確認できる数量と、コース本体から確実に推定できる基本セット品を加算しています。")
-                top_share_pie(top, "商品名", "全体販売数量", limit=8, title="販売数量構成比")
+                _show_store_share_pies(top, "商品名", "全体販売数量", "販売数量構成比", limit=12)
                 st.dataframe(_format_product_quantity_with_course(top), use_container_width=True, hide_index=True)
                 continue
 
@@ -383,8 +378,8 @@ def show_product_top(products: pd.DataFrame, store_name: str, month: str, limit:
             first = top.iloc[0]
             st.write(f"1位: **{first['商品名']}** / {label}: **{_format_top_value(first[sort_by], sort_by)}**")
             if sort_by == "純売上":
-                top_share_pie(top, "商品名", "純売上", limit=8, title="売上構成比")
-            product_top_bar(top, sort_by)
+                _show_store_share_pies(top, "商品名", "純売上", "売上構成比", limit=12)
+            _show_store_value_bars(top, "商品名", sort_by, f"{label} TOP")
             st.dataframe(_format_product_top(top), use_container_width=True, hide_index=True)
 
     with st.expander("確認用: 選択条件の商品データ先頭20件", expanded=False):
@@ -410,7 +405,7 @@ def show_course_analysis(products: pd.DataFrame, store_name: str, month: str, li
 
     if not summary.empty:
         st.markdown("#### コース本体")
-        top_share_pie(summary, "コース区分", "純売上", limit=6, title="コース売上構成比")
+        _show_store_share_pies(summary, "コース区分", "純売上", "コース売上構成比", limit=8)
         summary_display = add_display_formats(
             summary,
             {"販売数量": "number", "純売上": "yen", "取引数": "number", "平均単価": "yen"},
@@ -419,7 +414,7 @@ def show_course_analysis(products: pd.DataFrame, store_name: str, month: str, li
 
     if not components.empty:
         st.markdown("#### コース内で販売された商品点数")
-        top_share_pie(components, "商品名", "コース内販売数量", limit=8, title="コース内販売点数構成比")
+        _show_store_share_pies(components, "商品名", "コース内販売数量", "コース内販売点数構成比", limit=12)
         component_columns = [
             "順位",
             "店舗名",
@@ -460,7 +455,7 @@ def show_lunch_analysis(products: pd.DataFrame, store_name: str, month: str, lim
 
     if not items.empty:
         st.markdown("#### ランチ内構成比")
-        top_share_pie(items, "ランチ商品名", "純売上", limit=8, title="ランチ内売上構成比")
+        _show_store_share_pies(items, "ランチ商品名", "純売上", "ランチ内売上構成比", limit=15)
         item_columns = [
             "店舗名",
             "ランチ商品名",
@@ -499,10 +494,10 @@ def show_abc_analysis(products: pd.DataFrame, store_name: str, month: str, limit
         st.warning("選択条件の商品データがありません。")
         return
 
-    summary = abc.groupby("ABC区分", as_index=False).agg(商品数=("商品名", "count"), 純売上=("純売上", "sum"))
-    total = summary["純売上"].sum()
-    summary["構成比"] = summary["純売上"] / total if total else 0
-    pie_chart(summary, "ABC区分", "純売上", "ABC売上構成比")
+    summary = abc.groupby(["店舗名", "ABC区分"], as_index=False).agg(商品数=("商品名", "count"), 純売上=("純売上", "sum"))
+    totals = summary.groupby("店舗名")["純売上"].transform("sum")
+    summary["構成比"] = summary["純売上"] / totals.where(totals != 0, 1)
+    _show_store_share_pies(summary, "ABC区分", "純売上", "ABC売上構成比", limit=3)
     st.dataframe(
         add_display_formats(summary, {"純売上": "yen", "構成比": "share"}),
         use_container_width=True,
@@ -672,14 +667,56 @@ def _show_food_drink_store_pies(mix: pd.DataFrame) -> None:
         )
 
 
-def _show_department_store_pies(department: pd.DataFrame) -> None:
+def _show_store_value_bars(dataframe: pd.DataFrame, label_column: str, value_column: str, title_suffix: str) -> None:
+    if dataframe.empty or "店舗名" not in dataframe:
+        return
+    for store in dataframe["店舗名"].dropna().astype(str).unique().tolist():
+        store_data = dataframe[dataframe["店舗名"] == store].copy()
+        if store_data.empty:
+            continue
+        chart_data = store_data.groupby(label_column, as_index=True)[value_column].sum().sort_values(ascending=True)
+        st.markdown(f"##### {store} {title_suffix}")
+        st.bar_chart(chart_data)
+
+
+def _show_store_share_pies(
+    dataframe: pd.DataFrame,
+    label_column: str,
+    value_column: str,
+    title_suffix: str,
+    limit: int = 12,
+) -> None:
+    if dataframe.empty or "店舗名" not in dataframe:
+        return
+    stores = dataframe["店舗名"].dropna().astype(str).unique().tolist()
+    for store in stores:
+        store_data = dataframe[dataframe["店舗名"] == store].copy()
+        if store_data.empty:
+            continue
+        grouped = store_data.groupby(label_column, as_index=False)[value_column].sum().sort_values(value_column, ascending=False)
+        st.markdown(f"##### {store} {title_suffix}")
+        top_share_pie(grouped, label_column, value_column, limit=limit, title=f"{store} {title_suffix}")
+        if len(grouped) > limit:
+            other_value = grouped.iloc[limit:][value_column].sum()
+            other_text = format_number(other_value) if "数量" in value_column or "販売" in value_column else format_yen(other_value)
+            st.caption(f"「その他」は{limit + 1}位以下の合計です: {other_text}")
+
+
+def _show_department_store_sections(department: pd.DataFrame) -> None:
     if department.empty:
         return
     grouped = department.groupby(["店舗名", "部門名"], as_index=False)["純売上"].sum()
     stores = grouped["店舗名"].dropna().astype(str).unique().tolist()
     for store in stores:
         store_data = grouped[grouped["店舗名"] == store].sort_values("純売上", ascending=False)
-        top_share_pie(store_data, "部門名", "純売上", limit=8, title=f"{store}")
+        st.markdown(f"##### {store}")
+        st.markdown("純売上")
+        st.bar_chart(store_data.set_index("部門名")["純売上"].sort_values(ascending=True))
+        st.markdown("構成比")
+        top_share_pie(store_data, "部門名", "純売上", limit=12, title=f"{store} 部門別構成比")
+        if len(store_data) > 12:
+            other_value = store_data.iloc[12:]["純売上"].sum()
+            st.caption(f"「その他」は13位以下の部門合計です: {format_yen(other_value)}")
 
 
 def _show_store_product_table(dataframe: pd.DataFrame) -> None:
