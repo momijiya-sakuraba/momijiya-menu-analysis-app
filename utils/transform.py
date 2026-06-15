@@ -126,10 +126,14 @@ def _store_month_totals(dataframe: pd.DataFrame, month: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def department_analysis(departments: pd.DataFrame, store_name: str, selected_month: str) -> pd.DataFrame:
+def department_analysis(departments: pd.DataFrame, store_name: str, selected_month: str | None) -> pd.DataFrame:
     current = filter_by_store_month(departments, store_name, selected_month)
-    prev = filter_by_store_month(departments, store_name, previous_month(selected_month))
-    year = filter_by_store_month(departments, store_name, previous_year_month(selected_month))
+    if selected_month:
+        prev = filter_by_store_month(departments, store_name, previous_month(selected_month))
+        year = filter_by_store_month(departments, store_name, previous_year_month(selected_month))
+    else:
+        prev = pd.DataFrame(columns=departments.columns)
+        year = pd.DataFrame(columns=departments.columns)
 
     grouped = _group_department(current)
     prev_grouped = _group_department(prev).rename(columns={"純売上": "前月純売上"})
@@ -142,7 +146,7 @@ def department_analysis(departments: pd.DataFrame, store_name: str, selected_mon
     merged["構成比"] = merged["純売上"] / total_sales if total_sales else 0
     merged["前月比"] = merged.apply(lambda row: change_rate(row["純売上"], row["前月純売上"]), axis=1)
     merged["前年同月比"] = merged.apply(lambda row: change_rate(row["純売上"], row["前年同月純売上"]), axis=1)
-    merged.insert(0, "集計月", selected_month)
+    merged.insert(0, "集計月", selected_month or "選択期間")
     return merged.sort_values("純売上", ascending=False)
 
 
@@ -156,7 +160,7 @@ def _group_department(dataframe: pd.DataFrame) -> pd.DataFrame:
 def product_top(
     products: pd.DataFrame,
     store_name: str,
-    selected_month: str,
+    selected_month: str | None,
     limit: int,
     sort_by: str,
     exclude_delivery: bool = True,
@@ -251,7 +255,7 @@ def _non_lunch_non_course_rows(dataframe: pd.DataFrame) -> pd.DataFrame:
 def product_quantity_with_course(
     products: pd.DataFrame,
     store_name: str,
-    selected_month: str,
+    selected_month: str | None,
     limit: int,
     exclude_delivery: bool = True,
 ) -> pd.DataFrame:
@@ -341,7 +345,7 @@ def product_quantity_with_course(
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def course_analysis(products: pd.DataFrame, store_name: str, selected_month: str, exclude_delivery: bool = True) -> dict[str, pd.DataFrame]:
+def course_analysis(products: pd.DataFrame, store_name: str, selected_month: str | None, exclude_delivery: bool = True) -> dict[str, pd.DataFrame]:
     current = filter_by_store_month(products, store_name, selected_month)
     if exclude_delivery:
         current = exclude_delivery_rows(current)
@@ -379,7 +383,7 @@ def course_analysis(products: pd.DataFrame, store_name: str, selected_month: str
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def lunch_analysis(products: pd.DataFrame, store_name: str, selected_month: str, exclude_delivery: bool = True) -> dict[str, pd.DataFrame]:
+def lunch_analysis(products: pd.DataFrame, store_name: str, selected_month: str | None, exclude_delivery: bool = True) -> dict[str, pd.DataFrame]:
     current = filter_by_store_month(products, store_name, selected_month)
     if exclude_delivery:
         current = exclude_delivery_rows(current)
@@ -418,7 +422,7 @@ def lunch_analysis(products: pd.DataFrame, store_name: str, selected_month: str,
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def food_drink_mix(departments: pd.DataFrame, store_name: str, selected_month: str) -> dict[str, pd.DataFrame]:
+def food_drink_mix(departments: pd.DataFrame, store_name: str, selected_month: str | None) -> dict[str, pd.DataFrame]:
     current = filter_by_store_month(departments, store_name, selected_month)
     if current.empty:
         return {"mix": pd.DataFrame(), "details": pd.DataFrame()}
@@ -447,14 +451,16 @@ def _food_drink_group(department_name: str) -> str:
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def abc_analysis(products: pd.DataFrame, store_name: str, selected_month: str, exclude_delivery: bool = True) -> pd.DataFrame:
+def abc_analysis(products: pd.DataFrame, store_name: str, selected_month: str | None, exclude_delivery: bool = True) -> pd.DataFrame:
     current = product_top(products, store_name, selected_month, 100000, "純売上", exclude_delivery)
     if current.empty:
         return current
-    total_sales = current["純売上"].sum()
-    current["構成比"] = current["純売上"] / total_sales if total_sales else 0
-    current["累計構成比"] = current["構成比"].cumsum()
+    current = current.sort_values(["店舗名", "純売上"], ascending=[True, False]).copy()
+    store_totals = current.groupby("店舗名")["純売上"].transform("sum")
+    current["構成比"] = current["純売上"] / store_totals.where(store_totals != 0, 1)
+    current["累計構成比"] = current.groupby("店舗名")["構成比"].cumsum()
     current["ABC区分"] = current["累計構成比"].map(_abc_label)
+    current["順位"] = current.groupby("店舗名").cumcount() + 1
     return current
 
 
@@ -491,8 +497,8 @@ def product_change_ranking(
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def store_product_comparison(products: pd.DataFrame, selected_month: str, exclude_delivery: bool = True) -> pd.DataFrame:
-    current = products[products["集計月"] == selected_month].copy()
+def store_product_comparison(products: pd.DataFrame, selected_month: str | None, exclude_delivery: bool = True) -> pd.DataFrame:
+    current = products[products["集計月"] == selected_month].copy() if selected_month else products.copy()
     if exclude_delivery:
         current = exclude_delivery_rows(current)
     current = _non_lunch_non_course_rows(current)
@@ -515,8 +521,8 @@ def store_product_comparison(products: pd.DataFrame, selected_month: str, exclud
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
-def store_department_comparison(departments: pd.DataFrame, selected_month: str) -> pd.DataFrame:
-    current = departments[departments["集計月"] == selected_month].copy()
+def store_department_comparison(departments: pd.DataFrame, selected_month: str | None) -> pd.DataFrame:
+    current = departments[departments["集計月"] == selected_month].copy() if selected_month else departments.copy()
     if current.empty:
         return pd.DataFrame()
     grouped = current.groupby(["部門名", "店舗名"], as_index=False)["純売上"].sum()
@@ -533,12 +539,12 @@ def store_department_comparison(departments: pd.DataFrame, selected_month: str) 
 def improvement_candidates(
     products: pd.DataFrame,
     store_name: str,
-    selected_month: str,
+    selected_month: str | None,
     exclude_delivery: bool = True,
 ) -> dict[str, pd.DataFrame]:
     abc = abc_analysis(products, store_name, selected_month, exclude_delivery)
     store_compare = store_product_comparison(products, selected_month, exclude_delivery)
-    prev = product_change_ranking(products, store_name, selected_month, previous_month(selected_month), exclude_delivery)
+    prev = product_change_ranking(products, store_name, selected_month, previous_month(selected_month), exclude_delivery) if selected_month else pd.DataFrame()
 
     c_candidates = pd.DataFrame()
     pop_candidates = pd.DataFrame()

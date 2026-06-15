@@ -34,6 +34,7 @@ from utils.transform import (
 
 
 st.set_page_config(page_title="商品・部門分析アプリ", page_icon="M", layout="wide")
+STORE_DISPLAY_ORDER = ["飯田橋店", "神田店", "東池袋店"]
 
 
 def main() -> None:
@@ -70,56 +71,80 @@ def main() -> None:
     with st.sidebar:
         store_name = st.selectbox("店舗選択", STORE_OPTIONS, index=0)
         month = st.selectbox("月選択", options["months"], index=options["months"].index(latest_month))
+        use_period = st.checkbox("任意期間で集計", value=False)
+        period_start = month
+        period_end = month
+        if use_period:
+            period_start = st.selectbox("集計開始月", options["months"], index=options["months"].index(month))
+            period_end = st.selectbox("集計終了月", options["months"], index=options["months"].index(month))
         compare_mode = st.radio("比較対象月", ["前月", "前年同月", "任意の月"], index=0)
         if compare_mode == "任意の月":
             custom_compare_month = st.selectbox("任意の比較月", options["months"], index=max(0, len(options["months"]) - 2))
         display_limit = st.selectbox("表示件数", [10, 20, 50, 100], index=1)
         exclude_delivery = st.checkbox("商品分析からデリバリー売上を除外", value=True)
 
+    if use_period and period_start > period_end:
+        period_start, period_end = period_end, period_start
+        st.warning("集計開始月と終了月が逆だったため、自動で入れ替えました。")
+
+    analysis_products = sales_data.products
+    analysis_departments = sales_data.departments
+    analysis_month: str | None = month
+    period_label = month
+    if use_period:
+        analysis_products = _filter_month_range(sales_data.products, period_start, period_end)
+        analysis_departments = _filter_month_range(sales_data.departments, period_start, period_end)
+        analysis_month = None
+        period_label = f"{period_start}〜{period_end}"
+
     last_updated = _latest_updated_at(sales_data.products, sales_data.departments)
     st.info(
-        f"最新月: {latest_month} / 選択月: {month} / データ更新日時: {last_updated} / "
+        f"最新月: {latest_month} / 集計期間: {period_label} / データ更新日時: {last_updated} / "
         "初期表示では重い全商品一覧を表示しません。"
     )
 
-    kpis, store_summary = monthly_summary(sales_data.departments, month)
-    _show_store_dashboard(sales_data.products, sales_data.departments, store_summary, store_name, month, exclude_delivery)
+    if use_period:
+        store_summary = _period_store_summary(analysis_departments, period_label)
+    else:
+        _, store_summary = monthly_summary(sales_data.departments, month)
+    _show_store_dashboard(analysis_products, analysis_departments, store_summary, store_name, analysis_month, exclude_delivery)
 
     analysis = st.radio(
         "分析タブ",
-        ["店舗別ダッシュボード", "月次サマリー", "部門分析", "商品TOP分析", "コース分析", "ランチ分析", "ABC分析", "前月比・前年比ランキング", "店舗間比較", "改善候補"],
+        ["店舗別ダッシュボード", "部門分析", "商品TOP分析", "コース分析", "ランチ分析", "ABC分析", "前月比・前年比ランキング", "店舗間比較", "改善候補"],
         horizontal=True,
         label_visibility="collapsed",
     )
 
     if analysis == "店舗別ダッシュボード":
-        show_overview(sales_data.products, sales_data.departments, store_name, month, exclude_delivery)
-    elif analysis == "月次サマリー":
-        show_monthly_summary(store_summary)
+        show_overview(analysis_products, analysis_departments, store_name, analysis_month, exclude_delivery)
     elif analysis == "部門分析":
-        show_department_analysis(sales_data.departments, store_name, month)
+        show_department_analysis(analysis_departments, store_name, analysis_month)
     elif analysis == "商品TOP分析":
-        show_product_top(sales_data.products, store_name, month, display_limit, exclude_delivery)
+        show_product_top(analysis_products, store_name, analysis_month, display_limit, exclude_delivery)
     elif analysis == "コース分析":
-        show_course_analysis(sales_data.products, store_name, month, display_limit, exclude_delivery)
+        show_course_analysis(analysis_products, store_name, analysis_month, display_limit, exclude_delivery)
     elif analysis == "ランチ分析":
-        show_lunch_analysis(sales_data.products, store_name, month, display_limit, exclude_delivery)
+        show_lunch_analysis(analysis_products, store_name, analysis_month, display_limit, exclude_delivery)
     elif analysis == "ABC分析":
-        show_abc_analysis(sales_data.products, store_name, month, display_limit, exclude_delivery)
+        show_abc_analysis(analysis_products, store_name, analysis_month, display_limit, exclude_delivery)
     elif analysis == "前月比・前年比ランキング":
-        show_change_rankings(
-            sales_data.products,
-            store_name,
-            month,
-            display_limit,
-            exclude_delivery,
-            compare_mode,
-            custom_compare_month,
-        )
+        if use_period:
+            st.info("前月比・前年比ランキングは、比較対象月との増減を見るため単月選択時のみ表示します。任意期間では他の分析タブをご確認ください。")
+        else:
+            show_change_rankings(
+                sales_data.products,
+                store_name,
+                month,
+                display_limit,
+                exclude_delivery,
+                compare_mode,
+                custom_compare_month,
+            )
     elif analysis == "店舗間比較":
-        show_store_comparison(sales_data.products, sales_data.departments, month, display_limit, exclude_delivery)
+        show_store_comparison(analysis_products, analysis_departments, analysis_month, display_limit, exclude_delivery)
     elif analysis == "改善候補":
-        show_improvement_candidates(sales_data.products, store_name, month, display_limit, exclude_delivery)
+        show_improvement_candidates(analysis_products, store_name, analysis_month, display_limit, exclude_delivery)
 
     st.caption(
         "注意: 商品名・商品コード・部門名の変更があると別商品/別部門として扱われる場合があります。"
@@ -140,6 +165,37 @@ def _show_kpis(kpis: dict[str, float | str | None]) -> None:
     sub_columns[1].caption(
         f"前年同月 {kpis['前年同月']}: {format_yen(kpis['前年同月純売上'])} / {format_percent(kpis['前年同月比'])}"
     )
+
+
+def _filter_month_range(dataframe: pd.DataFrame, start_month: str, end_month: str) -> pd.DataFrame:
+    if dataframe.empty:
+        return dataframe.copy()
+    return dataframe[(dataframe["集計月"] >= start_month) & (dataframe["集計月"] <= end_month)].copy()
+
+
+def _store_order_value(store_name: str) -> int:
+    try:
+        return STORE_DISPLAY_ORDER.index(str(store_name))
+    except ValueError:
+        return len(STORE_DISPLAY_ORDER)
+
+
+def _sort_by_store(dataframe: pd.DataFrame) -> pd.DataFrame:
+    if dataframe.empty or "店舗名" not in dataframe:
+        return dataframe
+    sorted_data = dataframe.copy()
+    sorted_data["_store_order"] = sorted_data["店舗名"].map(_store_order_value)
+    sorted_data = sorted_data.sort_values(["_store_order", "純売上"] if "純売上" in sorted_data else ["_store_order"], ascending=[True, False] if "純売上" in sorted_data else True)
+    return sorted_data.drop(columns=["_store_order"])
+
+
+def _period_store_summary(departments: pd.DataFrame, period_label: str) -> pd.DataFrame:
+    if departments.empty:
+        return pd.DataFrame(columns=["集計月", "店舗名", "純売上", "販売数量", "前月比"])
+    summary = departments.groupby("店舗名", as_index=False)[["純売上", "販売数量"]].sum()
+    summary.insert(0, "集計月", period_label)
+    summary["前月比"] = None
+    return _sort_by_store(summary)
 
 
 def _show_store_dashboard(
@@ -188,7 +244,7 @@ def _show_store_dashboard(
 
     st.markdown("#### 店舗別月次サマリー")
     display = add_display_formats(
-        dashboard.sort_values("純売上", ascending=False),
+        _sort_by_store(dashboard),
         {
             "純売上": "yen",
             "販売数量": "number",
@@ -228,7 +284,7 @@ def _store_dashboard_note(row: pd.Series) -> str:
     return " / ".join(notes)
 
 
-def show_overview(products: pd.DataFrame, departments: pd.DataFrame, store_name: str, month: str, exclude_delivery: bool) -> None:
+def show_overview(products: pd.DataFrame, departments: pd.DataFrame, store_name: str, month: str | None, exclude_delivery: bool) -> None:
     st.subheader("店舗別ダッシュボード")
     st.caption("店舗ごとの状態を先に確認してから、部門・商品・コース・ランチの詳細へ進みます。")
 
@@ -326,7 +382,7 @@ def _decision_messages(
     return messages
 
 
-def show_department_analysis(departments: pd.DataFrame, store_name: str, month: str) -> None:
+def show_department_analysis(departments: pd.DataFrame, store_name: str, month: str | None) -> None:
     st.subheader("部門分析")
     st.caption(_store_hint(store_name))
     department = department_analysis(departments, store_name, month)
@@ -398,12 +454,12 @@ def show_department_analysis(departments: pd.DataFrame, store_name: str, month: 
     st.dataframe(display, use_container_width=True, hide_index=True)
 
 
-def show_product_top(products: pd.DataFrame, store_name: str, month: str, limit: int, exclude_delivery: bool) -> None:
+def show_product_top(products: pd.DataFrame, store_name: str, month: str | None, limit: int, exclude_delivery: bool) -> None:
     st.subheader("商品TOP分析")
     delivery_note = "デリバリー売上は除外しています。" if exclude_delivery else "デリバリー売上も含めています。"
     st.caption(f"全商品一覧は初期表示せず、売上・数量・平均単価のTOPだけを表示します。売上TOPと平均単価TOPはランチ商品・コース内訳を除外します。{delivery_note}")
 
-    scoped = products[products["集計月"] == month].copy()
+    scoped = products[products["集計月"] == month].copy() if month else products.copy()
     if store_name != "全店":
         scoped = scoped[scoped["店舗名"] == store_name]
     analysis_scope = exclude_delivery_rows(scoped) if exclude_delivery else scoped
@@ -448,7 +504,7 @@ def show_product_top(products: pd.DataFrame, store_name: str, month: str, limit:
         st.dataframe(preview, use_container_width=True, hide_index=True)
 
 
-def show_course_analysis(products: pd.DataFrame, store_name: str, month: str, limit: int, exclude_delivery: bool) -> None:
+def show_course_analysis(products: pd.DataFrame, store_name: str, month: str | None, limit: int, exclude_delivery: bool) -> None:
     st.subheader("コース分析")
     st.caption(
         "コース本体の販売数と、コース内で販売された商品点数を分けて確認します。"
@@ -493,7 +549,7 @@ def show_course_analysis(products: pd.DataFrame, store_name: str, month: str, li
         st.dataframe(component_display, use_container_width=True, hide_index=True)
 
 
-def show_lunch_analysis(products: pd.DataFrame, store_name: str, month: str, limit: int, exclude_delivery: bool) -> None:
+def show_lunch_analysis(products: pd.DataFrame, store_name: str, month: str | None, limit: int, exclude_delivery: bool) -> None:
     st.subheader("ランチ分析")
     st.caption("【ランチ】系の商品だけを抜き出し、ランチ内で何が売れているかを確認します。通常商品TOPやABCからはランチ商品を外しています。")
     st.info("ランチ時間帯に売れた通常商品やドリンクは、商品名だけでは判定できないためこの表には含めていません。まずは【ランチ】系商品の構成比を優先して確認します。")
@@ -543,7 +599,7 @@ def show_lunch_analysis(products: pd.DataFrame, store_name: str, month: str, lim
         st.dataframe(item_display, use_container_width=True, hide_index=True)
 
 
-def show_abc_analysis(products: pd.DataFrame, store_name: str, month: str, limit: int, exclude_delivery: bool) -> None:
+def show_abc_analysis(products: pd.DataFrame, store_name: str, month: str | None, limit: int, exclude_delivery: bool) -> None:
     st.subheader("ABC分析")
     delivery_note = "商品判断をしやすくするため、デリバリー売上は除外しています。" if exclude_delivery else "デリバリー売上も含めています。"
     st.caption(
@@ -620,7 +676,7 @@ def show_change_rankings(
 def show_store_comparison(
     products: pd.DataFrame,
     departments: pd.DataFrame,
-    month: str,
+    month: str | None,
     limit: int,
     exclude_delivery: bool,
 ) -> None:
@@ -641,7 +697,7 @@ def show_store_comparison(
         _show_store_product_table(gap)
 
 
-def show_improvement_candidates(products: pd.DataFrame, store_name: str, month: str, limit: int, exclude_delivery: bool) -> None:
+def show_improvement_candidates(products: pd.DataFrame, store_name: str, month: str | None, limit: int, exclude_delivery: bool) -> None:
     st.subheader("改善候補")
     st.caption("自動で廃止とは判断しません。店長会議で確認するための候補として表示します。")
     st.info(
@@ -714,7 +770,7 @@ def _food_drink_chart_data(mix: pd.DataFrame) -> pd.DataFrame:
 def _show_food_drink_store_pies(mix: pd.DataFrame) -> None:
     if mix.empty:
         return
-    for _, row in mix.iterrows():
+    for _, row in _sort_by_store(mix).iterrows():
         chart_data = pd.DataFrame(
             [
                 {"分類": "フード", "純売上": float(row.get("フード", 0) or 0)},
@@ -731,7 +787,8 @@ def _show_food_drink_store_pies(mix: pd.DataFrame) -> None:
 def _show_store_value_bars(dataframe: pd.DataFrame, label_column: str, value_column: str, title_suffix: str) -> None:
     if dataframe.empty or "店舗名" not in dataframe:
         return
-    for store in dataframe["店舗名"].dropna().astype(str).unique().tolist():
+    stores = sorted(dataframe["店舗名"].dropna().astype(str).unique().tolist(), key=_store_order_value)
+    for store in stores:
         store_data = dataframe[dataframe["店舗名"] == store].copy()
         if store_data.empty:
             continue
@@ -749,7 +806,7 @@ def _show_store_share_pies(
 ) -> None:
     if dataframe.empty or "店舗名" not in dataframe:
         return
-    stores = dataframe["店舗名"].dropna().astype(str).unique().tolist()
+    stores = sorted(dataframe["店舗名"].dropna().astype(str).unique().tolist(), key=_store_order_value)
     for store in stores:
         store_data = dataframe[dataframe["店舗名"] == store].copy()
         if store_data.empty:
@@ -767,7 +824,7 @@ def _show_department_store_sections(department: pd.DataFrame) -> None:
     if department.empty:
         return
     grouped = department.groupby(["店舗名", "部門名"], as_index=False)["純売上"].sum()
-    stores = grouped["店舗名"].dropna().astype(str).unique().tolist()
+    stores = sorted(grouped["店舗名"].dropna().astype(str).unique().tolist(), key=_store_order_value)
     for store in stores:
         store_data = grouped[grouped["店舗名"] == store].sort_values("純売上", ascending=False)
         st.markdown(f"##### {store}")
