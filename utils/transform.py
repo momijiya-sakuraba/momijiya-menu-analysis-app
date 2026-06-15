@@ -445,6 +445,12 @@ def food_drink_mix(departments: pd.DataFrame, store_name: str, selected_month: s
 
 def _food_drink_group(department_name: str) -> str:
     name = str(department_name)
+    if any(keyword in name for keyword in ("周年", "キャンペーン", "半額", "無料", "神田祭")):
+        return "別枠"
+    if any(keyword in name for keyword in ("デリバリー", "UberEats", "出前館", "売掛", "島デリバリー")):
+        return "別枠"
+    if name in {"ランチ", "FM", "アルコール①", "アルコール②", "ドリンク", "日本酒", "飲み放題", "【ＴＯ】お酒", "【TO】お酒", "テイクアウト", "テイクアウト・デリバリー"}:
+        return "別枠"
     if any(keyword in name for keyword in DRINK_DEPARTMENT_KEYWORDS):
         return "ドリンク"
     return "フード"

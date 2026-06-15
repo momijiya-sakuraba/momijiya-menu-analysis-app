@@ -37,15 +37,10 @@ st.set_page_config(page_title="商品・部門分析アプリ", page_icon="M", l
 STORE_DISPLAY_ORDER = ["飯田橋店", "神田店", "東池袋店"]
 DEPARTMENT_DISPLAY_ORDER = [
     "お好み焼",
-    "TOお好み焼",
     "鉄板焼",
-    "TO鉄板焼",
     "おつまみ",
-    "TOおつまみ",
     "焼ソバ・焼ウドン",
-    "TO焼ソバ・焼ウドン",
     "トッピング",
-    "TOトッピング",
     "コース",
     "デザート",
     "ビール",
@@ -54,19 +49,20 @@ DEPARTMENT_DISPLAY_ORDER = [
     "果実酒",
     "ノンアルコール",
     "ソフトドリンク",
+]
+SPECIAL_DEPARTMENT_ORDER = [
+    "ランチ",
+    "キャンペーン・周年",
+    "デリバリー/売掛",
+    "旧カテゴリ・要確認",
     "その他・要確認",
 ]
 DEPARTMENT_COLORS = {
     "お好み焼": "#2E7D32",
-    "TOお好み焼": "#81C784",
     "鉄板焼": "#00897B",
-    "TO鉄板焼": "#80CBC4",
     "おつまみ": "#F9A825",
-    "TOおつまみ": "#FFE082",
     "焼ソバ・焼ウドン": "#EF6C00",
-    "TO焼ソバ・焼ウドン": "#FFB74D",
     "トッピング": "#6D4C41",
-    "TOトッピング": "#BCAAA4",
     "コース": "#C62828",
     "デザート": "#AD1457",
     "ビール": "#1565C0",
@@ -75,6 +71,10 @@ DEPARTMENT_COLORS = {
     "果実酒": "#8E24AA",
     "ノンアルコール": "#26A69A",
     "ソフトドリンク": "#64B5F6",
+    "ランチ": "#7CB342",
+    "キャンペーン・周年": "#FB8C00",
+    "デリバリー/売掛": "#78909C",
+    "旧カテゴリ・要確認": "#8D6E63",
     "その他・要確認": "#9E9E9E",
 }
 
@@ -234,18 +234,25 @@ def _sort_by_store(dataframe: pd.DataFrame) -> pd.DataFrame:
 def _department_display_name(department_name: str) -> str:
     name = str(department_name).replace("【ＴＯ】", "【TO】").strip()
     normalized = name.replace("焼きそば", "焼ソバ").replace("焼そば", "焼ソバ").replace("焼きうどん", "焼ウドン").replace("焼うどん", "焼ウドン")
-    is_to = "【TO】" in normalized or normalized.startswith("TO") or "テイクアウト" in normalized
+    if _is_campaign_department(normalized):
+        return "キャンペーン・周年"
+    if _is_delivery_department(normalized):
+        return "デリバリー/売掛"
+    if normalized == "ランチ":
+        return "ランチ"
+    if _is_legacy_department(normalized):
+        return "旧カテゴリ・要確認"
 
     if "お好み焼" in normalized:
-        return "TOお好み焼" if is_to else "お好み焼"
+        return "お好み焼"
     if "鉄板焼" in normalized:
-        return "TO鉄板焼" if is_to else "鉄板焼"
+        return "鉄板焼"
     if "おつまみ" in normalized or "とんぺい" in normalized:
-        return "TOおつまみ" if is_to else "おつまみ"
+        return "おつまみ"
     if "焼ソバ" in normalized or "焼ウドン" in normalized:
-        return "TO焼ソバ・焼ウドン" if is_to else "焼ソバ・焼ウドン"
+        return "焼ソバ・焼ウドン"
     if "トッピング" in normalized:
-        return "TOトッピング" if is_to else "トッピング"
+        return "トッピング"
     if "コース" in normalized:
         return "コース"
     if "デザート" in normalized:
@@ -265,19 +272,54 @@ def _department_display_name(department_name: str) -> str:
     return "その他・要確認"
 
 
+def _department_detail_name(department_name: str) -> str:
+    name = str(department_name).replace("【ＴＯ】", "【TO】").strip()
+    normalized = name.replace("焼きそば", "焼ソバ").replace("焼そば", "焼ソバ").replace("焼きうどん", "焼ウドン").replace("焼うどん", "焼ウドン")
+    is_to = "【TO】" in normalized or normalized.startswith("TO") or "テイクアウト" in normalized
+    base_name = _department_display_name(department_name)
+    if base_name in DEPARTMENT_DISPLAY_ORDER and is_to:
+        return f"TO{base_name}"
+    if base_name in DEPARTMENT_DISPLAY_ORDER:
+        return f"店内{base_name}"
+    return base_name
+
+
+def _is_campaign_department(name: str) -> bool:
+    return any(keyword in name for keyword in ("周年", "キャンペーン", "半額", "無料", "神田祭"))
+
+
+def _is_delivery_department(name: str) -> bool:
+    return any(keyword in name for keyword in ("デリバリー", "UberEats", "出前館", "売掛", "島デリバリー"))
+
+
+def _is_legacy_department(name: str) -> bool:
+    return name in {"FM", "アルコール①", "アルコール②", "ドリンク", "日本酒", "飲み放題", "【TO】お酒", "テイクアウト", "テイクアウト・デリバリー"}
+
+
+def _is_normal_department(display_name: str) -> bool:
+    return display_name in DEPARTMENT_DISPLAY_ORDER
+
+
+def _is_special_department(display_name: str) -> bool:
+    return display_name in SPECIAL_DEPARTMENT_ORDER
+
+
 def _department_order_value(department_name: str) -> int:
     try:
         return DEPARTMENT_DISPLAY_ORDER.index(str(department_name))
     except ValueError:
-        return len(DEPARTMENT_DISPLAY_ORDER)
+        try:
+            return len(DEPARTMENT_DISPLAY_ORDER) + SPECIAL_DEPARTMENT_ORDER.index(str(department_name))
+        except ValueError:
+            return len(DEPARTMENT_DISPLAY_ORDER) + len(SPECIAL_DEPARTMENT_ORDER)
 
 
 def _department_color_domain() -> list[str]:
-    return DEPARTMENT_DISPLAY_ORDER
+    return DEPARTMENT_DISPLAY_ORDER + SPECIAL_DEPARTMENT_ORDER
 
 
 def _department_color_range() -> list[str]:
-    return [DEPARTMENT_COLORS[name] for name in DEPARTMENT_DISPLAY_ORDER]
+    return [DEPARTMENT_COLORS[name] for name in DEPARTMENT_DISPLAY_ORDER + SPECIAL_DEPARTMENT_ORDER]
 
 
 def _department_missing_names(department: pd.DataFrame) -> list[str]:
@@ -501,7 +543,7 @@ def show_department_analysis(departments: pd.DataFrame, store_name: str, month: 
 
     mix_data = food_drink_mix(departments, store_name, month)
     st.markdown("#### フード/ドリンク比")
-    st.caption("まず店舗ごとのフード売上とドリンク売上の比率を確認します。ボトルとアイスは神田店のみ販売の商品として、商品分析側で注意表示します。")
+    st.caption("通常営業の部門だけで計算します。ランチ、キャンペーン・周年、デリバリー/売掛、旧カテゴリはフード/ドリンク比から外しています。")
     if not mix_data["mix"].empty:
         st.caption("全店合算ではなく、店舗ごとの円グラフで確認します。")
         _show_food_drink_store_pies(mix_data["mix"])
@@ -518,15 +560,18 @@ def show_department_analysis(departments: pd.DataFrame, store_name: str, month: 
         st.dataframe(mix_display, use_container_width=True, hide_index=True)
     if not mix_data["details"].empty:
         with st.expander("フード内・ドリンク内の部門構成を見る", expanded=False):
+            details = mix_data["details"][mix_data["details"]["大分類"].isin(["フード", "ドリンク"])].copy()
             detail_display = add_display_formats(
-                mix_data["details"],
+                details,
                 {"純売上": "yen", "分類内構成比": "share"},
             )
             st.dataframe(detail_display, use_container_width=True, hide_index=True)
 
-    st.markdown("#### 店舗別の部門別純売上・構成比")
-    st.caption("全店合算ではなく、店舗ごとに部門別純売上と構成比を確認します。")
+    st.markdown("#### 通常部門構成")
+    st.caption("TO系は通常表示では店内売上と合算しています。店内/TOの内訳は下の展開欄で確認できます。")
     _show_department_store_sections(department)
+    _show_department_to_breakdown(department)
+    _show_special_department_sections(department)
     missing_departments = _department_missing_names(department)
     if missing_departments:
         with st.expander("指定順に未分類の部門を見る", expanded=False):
@@ -572,6 +617,7 @@ def show_product_top(products: pd.DataFrame, store_name: str, month: str | None,
     st.subheader("商品TOP分析")
     delivery_note = "デリバリー売上は除外しています。" if exclude_delivery else "デリバリー売上も含めています。"
     st.caption(f"全商品一覧は初期表示せず、売上・数量・平均単価のTOPだけを表示します。売上TOPと平均単価TOPはランチ商品・コース内訳を除外します。{delivery_note}")
+    st.info("ランチ商品、【コース】内訳、キャンペーン系は通常の商品力判断と分けて確認します。ランチはランチ分析、コース内訳はコース分析で確認してください。")
 
     scoped = products[products["集計月"] == month].copy() if month else products.copy()
     if store_name != "全店":
@@ -625,6 +671,7 @@ def show_course_analysis(products: pd.DataFrame, store_name: str, month: str | N
         "「コース料理」はおつまみコースとして扱います。"
     )
     st.info("「コース内で販売された商品点数」は、商品名が【コース】で始まる商品のみを対象にしています。ブタシソ・ママカリなどの基本セット品はこの表には含めません。")
+    st.caption("コース本体の売上と、コース内で選ばれた商品は別物として見ます。仕込み量や人気メニュー確認に使ってください。")
 
     course = course_analysis(products, store_name, month, exclude_delivery)
     summary = course["summary"]
@@ -667,6 +714,7 @@ def show_lunch_analysis(products: pd.DataFrame, store_name: str, month: str | No
     st.subheader("ランチ分析")
     st.caption("【ランチ】系の商品だけを抜き出し、ランチ内で何が売れているかを確認します。通常商品TOPやABCからはランチ商品を外しています。")
     st.info("ランチ時間帯に売れた通常商品やドリンクは、商品名だけでは判定できないためこの表には含めていません。まずは【ランチ】系商品の構成比を優先して確認します。")
+    st.caption("ランチは通常のお好み焼売上には混ぜず、ランチ価格・時間帯の商品として別枠で見ます。")
 
     lunch = lunch_analysis(products, store_name, month, exclude_delivery)
     summary = lunch["summary"]
@@ -720,6 +768,7 @@ def show_abc_analysis(products: pd.DataFrame, store_name: str, month: str | None
         "A商品は欠品・品質低下を防ぐ最重要商品、B商品はおすすめ強化候補、"
         f"C商品は整理・統合・名称変更・価格見直しの確認候補です。{delivery_note}"
     )
+    st.info("ABC分類は店舗ごとの売上構成で判定します。ランチ商品・コース内訳・デリバリーは通常の商品判断から外しています。")
     abc = abc_analysis(products, store_name, month, exclude_delivery)
     if abc.empty:
         st.warning("選択条件の商品データがありません。")
@@ -797,6 +846,7 @@ def show_store_comparison(
     st.subheader("店舗間比較")
     delivery_note = "商品比較ではデリバリー売上を除外しています。" if exclude_delivery else "商品比較ではデリバリー売上も含めています。"
     st.caption(f"他店舗では売れているのに、自店舗では弱い商品を見つけます。{delivery_note}")
+    st.info("横展開候補を探す画面です。ランチ・コース内訳・デリバリーは通常商品比較のノイズになりやすいため、商品比較では分けて扱います。")
 
     product_compare = store_product_comparison(products, month, exclude_delivery)
     department_compare = store_department_comparison(departments, month)
@@ -818,6 +868,7 @@ def show_improvement_candidates(products: pd.DataFrame, store_name: str, month: 
         "確認の優先順位: 1. 他店で強いのに自店で弱い商品、2. B商品で伸ばせそうなPOP候補、"
         "3. C商品でも季節・店舗限定・コース内訳ではない整理確認候補。"
     )
+    st.caption("キャンペーン・周年、ランチ、コース内訳は通常商品の改善判断とは分けて確認します。自動判定は候補出しであり、廃止判断ではありません。")
     if store_name == "全店":
         st.info("おすすめ強化候補は店舗別の弱い商品を見るため、店舗を1つ選ぶとより使いやすくなります。")
 
@@ -946,6 +997,10 @@ def _show_department_store_sections(department: pd.DataFrame) -> None:
         return
     chart_source = department.copy()
     chart_source["表示部門名"] = chart_source["部門名"].map(_department_display_name)
+    chart_source = chart_source[chart_source["表示部門名"].map(_is_normal_department)].copy()
+    if chart_source.empty:
+        st.info("通常部門のデータがありません。")
+        return
     grouped = chart_source.groupby(["店舗名", "表示部門名"], as_index=False)["純売上"].sum()
     grouped["_department_order"] = grouped["表示部門名"].map(_department_order_value)
     stores = sorted(grouped["店舗名"].dropna().astype(str).unique().tolist(), key=_store_order_value)
@@ -963,6 +1018,41 @@ def _show_department_store_sections(department: pd.DataFrame) -> None:
             color_domain=_department_color_domain(),
             color_range=_department_color_range(),
         )
+
+
+def _show_department_to_breakdown(department: pd.DataFrame) -> None:
+    if department.empty:
+        return
+    breakdown = department.copy()
+    breakdown["表示部門名"] = breakdown["部門名"].map(_department_display_name)
+    breakdown = breakdown[breakdown["表示部門名"].map(_is_normal_department)].copy()
+    if breakdown.empty:
+        return
+    breakdown["内訳区分"] = breakdown["部門名"].map(_department_detail_name)
+    grouped = breakdown.groupby(["店舗名", "表示部門名", "内訳区分"], as_index=False)[["販売数量", "純売上"]].sum()
+    grouped["_store_order"] = grouped["店舗名"].map(_store_order_value)
+    grouped["_department_order"] = grouped["表示部門名"].map(_department_order_value)
+    grouped = grouped.sort_values(["_store_order", "_department_order", "内訳区分"]).drop(columns=["_store_order", "_department_order"])
+    with st.expander("店内/TO内訳を見る", expanded=False):
+        st.caption("通常部門構成ではTO系を店内と合算しています。ここではテイクアウト比率の確認用に分けて表示します。")
+        st.dataframe(add_display_formats(grouped, {"販売数量": "number", "純売上": "yen"}), use_container_width=True, hide_index=True)
+
+
+def _show_special_department_sections(department: pd.DataFrame) -> None:
+    if department.empty:
+        return
+    special = department.copy()
+    special["表示部門名"] = special["部門名"].map(_department_display_name)
+    special = special[special["表示部門名"].map(_is_special_department)].copy()
+    if special.empty:
+        return
+    grouped = special.groupby(["店舗名", "表示部門名", "部門名"], as_index=False)[["販売数量", "純売上"]].sum()
+    grouped["_store_order"] = grouped["店舗名"].map(_store_order_value)
+    grouped["_department_order"] = grouped["表示部門名"].map(_department_order_value)
+    grouped = grouped.sort_values(["_store_order", "_department_order", "純売上"], ascending=[True, True, False]).drop(columns=["_store_order", "_department_order"])
+    st.markdown("#### 別枠部門")
+    st.caption("ランチ、キャンペーン・周年、デリバリー/売掛、旧カテゴリは通常部門構成とフード/ドリンク比から外し、確認用に分けて表示します。")
+    st.dataframe(add_display_formats(grouped, {"販売数量": "number", "純売上": "yen"}), use_container_width=True, hide_index=True)
 
 
 def _department_sales_chart(store_data: pd.DataFrame) -> None:
