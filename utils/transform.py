@@ -360,10 +360,21 @@ def course_analysis(products: pd.DataFrame, store_name: str, selected_month: str
         )
         summary["平均単価"] = summary.apply(lambda row: average_price(row["純売上"], row["販売数量"]), axis=1)
 
-    components = product_quantity_with_course(products, store_name, selected_month, 100000, exclude_delivery)
-    if not components.empty:
-        components = components[components["コース内販売数量"] > 0].copy()
-        components = components.sort_values("コース内販売数量", ascending=False)
+    component_rows = current[current["商品名"].astype(str).map(is_course_component_name)].copy()
+    components = pd.DataFrame()
+    if not component_rows.empty:
+        component_rows["商品名"] = component_rows["商品名"].map(normalize_course_component_product)
+        components = (
+            component_rows.groupby(["店舗名", "商品名", "部門名"], as_index=False)[["販売数量", "取引数"]]
+            .sum()
+            .rename(columns={"販売数量": "コース内販売数量"})
+            .sort_values("コース内販売数量", ascending=False)
+            .reset_index(drop=True)
+        )
+        components["単品販売数量"] = 0.0
+        components["全体販売数量"] = components["コース内販売数量"]
+        components["商品分類メモ"] = "【コース】商品のみ"
+        components.insert(0, "順位", components.index + 1)
     return {"summary": summary, "components": components}
 
 

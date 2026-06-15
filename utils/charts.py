@@ -41,13 +41,13 @@ def pie_chart(dataframe: pd.DataFrame, label_column: str, value_column: str, tit
         return
 
     spec = {
-        "mark": {"type": "arc", "outerRadius": 112, "stroke": "#111827", "strokeWidth": 1},
+        "mark": {"type": "arc", "outerRadius": 90, "stroke": "#111827", "strokeWidth": 1},
         "encoding": {
             "theta": {"field": value_column, "type": "quantitative"},
             "color": {
                 "field": label_column,
                 "type": "nominal",
-                "legend": {"orient": "bottom", "columns": 2},
+                "legend": {"orient": "bottom", "columns": 2, "labelLimit": 220},
             },
             "tooltip": [
                 {"field": label_column, "type": "nominal", "title": label_column},
@@ -55,7 +55,7 @@ def pie_chart(dataframe: pd.DataFrame, label_column: str, value_column: str, tit
             ],
         },
         "view": {"stroke": None},
-        "height": 290,
+        "height": 245,
     }
     if title:
         spec["title"] = title

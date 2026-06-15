@@ -83,16 +83,16 @@ def main() -> None:
     )
 
     kpis, store_summary = monthly_summary(sales_data.departments, month)
-    _show_kpis(kpis)
+    _show_store_dashboard(sales_data.products, sales_data.departments, store_summary, store_name, month, exclude_delivery)
 
     analysis = st.radio(
         "分析タブ",
-        ["概要", "月次サマリー", "部門分析", "商品TOP分析", "コース分析", "ランチ分析", "ABC分析", "前月比・前年比ランキング", "店舗間比較", "改善候補"],
+        ["店舗別ダッシュボード", "月次サマリー", "部門分析", "商品TOP分析", "コース分析", "ランチ分析", "ABC分析", "前月比・前年比ランキング", "店舗間比較", "改善候補"],
         horizontal=True,
         label_visibility="collapsed",
     )
 
-    if analysis == "概要":
+    if analysis == "店舗別ダッシュボード":
         show_overview(sales_data.products, sales_data.departments, store_name, month, exclude_delivery)
     elif analysis == "月次サマリー":
         show_monthly_summary(store_summary)
@@ -142,40 +142,101 @@ def _show_kpis(kpis: dict[str, float | str | None]) -> None:
     )
 
 
-def show_overview(products: pd.DataFrame, departments: pd.DataFrame, store_name: str, month: str, exclude_delivery: bool) -> None:
-    st.subheader("概要")
-    st.caption("まず部門の大きな変化を見てから、商品TOPで具体的な商品を確認します。")
+def _show_store_dashboard(
+    products: pd.DataFrame,
+    departments: pd.DataFrame,
+    store_summary: pd.DataFrame,
+    store_name: str,
+    month: str,
+    exclude_delivery: bool,
+) -> None:
+    if store_summary.empty:
+        return
 
-    scoped_products = products[products["集計月"] == month].copy()
-    scoped_departments = departments[departments["集計月"] == month].copy()
+    dashboard = store_summary[["店舗名", "純売上", "販売数量", "前月比"]].copy()
     if store_name != "全店":
-        scoped_products = scoped_products[scoped_products["店舗名"] == store_name]
-        scoped_departments = scoped_departments[scoped_departments["店舗名"] == store_name]
+        dashboard = dashboard[dashboard["店舗名"] == store_name].copy()
 
-    product_rows_before = len(scoped_products)
-    scoped_products_for_analysis = exclude_delivery_rows(scoped_products) if exclude_delivery else scoped_products
-    product_rows_after = len(scoped_products_for_analysis)
-    department_count = scoped_departments["部門名"].nunique() if not scoped_departments.empty else 0
+    mix = food_drink_mix(departments, store_name, month)["mix"]
+    if not mix.empty:
+        dashboard = dashboard.merge(
+            mix[["店舗名", "フード比率", "ドリンク比率"]],
+            on="店舗名",
+            how="left",
+        )
 
-    cols = st.columns(4)
-    cols[0].metric("商品行数", format_number(product_rows_after))
-    cols[1].metric("除外した行数", format_number(product_rows_before - product_rows_after))
-    cols[2].metric("部門数", format_number(department_count))
-    cols[3].metric("商品分析", "デリバリー除外" if exclude_delivery else "デリバリー含む")
+    lunch_summary = lunch_analysis(products, store_name, month, exclude_delivery)["summary"]
+    if not lunch_summary.empty:
+        dashboard = dashboard.merge(
+            lunch_summary[["店舗名", "純売上"]].rename(columns={"純売上": "ランチ売上"}),
+            on="店舗名",
+            how="left",
+        )
 
-    st.markdown("#### 今月の注目ポイント")
-    _show_decision_dashboard(products, departments, store_name, month, exclude_delivery)
+    course_summary = course_analysis(products, store_name, month, exclude_delivery)["summary"]
+    if not course_summary.empty:
+        course_qty = course_summary.groupby("店舗名", as_index=False)["販売数量"].sum().rename(columns={"販売数量": "コース販売数"})
+        dashboard = dashboard.merge(course_qty, on="店舗名", how="left")
 
-    st.markdown("#### 今日見る順番")
-    st.write("1. 概要で今月の注目ポイントを確認")
-    st.write("2. 部門分析でフード/ドリンク比と部門構成を見る")
-    st.write("3. 商品TOP分析で主力商品とコース込み販売点数を確認")
-    st.write("4. コース分析・ランチ分析で、宴会/ランチの中身を確認")
-    st.write("5. 改善候補でおすすめ強化・整理確認・POP候補を決める")
+    for column in ["フード比率", "ドリンク比率", "ランチ売上", "コース販売数"]:
+        if column not in dashboard.columns:
+            dashboard[column] = 0
+    dashboard[["フード比率", "ドリンク比率", "ランチ売上", "コース販売数"]] = dashboard[
+        ["フード比率", "ドリンク比率", "ランチ売上", "コース販売数"]
+    ].fillna(0)
+    dashboard["注目メモ"] = dashboard.apply(_store_dashboard_note, axis=1)
 
-    st.markdown("#### この画面の前提")
-    st.write("月次サマリーと部門分析は売上全体を見るため、デリバリーも含めます。")
-    st.write("商品TOP分析とABC分析は商品判断をしやすくするため、初期設定でデリバリーを除外します。")
+    st.markdown("#### 店舗別月次サマリー")
+    display = add_display_formats(
+        dashboard.sort_values("純売上", ascending=False),
+        {
+            "純売上": "yen",
+            "販売数量": "number",
+            "前月比": "percent",
+            "フード比率": "share",
+            "ドリンク比率": "share",
+            "ランチ売上": "yen",
+            "コース販売数": "number",
+        },
+    )
+    st.dataframe(display, use_container_width=True, hide_index=True)
+
+
+def _store_dashboard_note(row: pd.Series) -> str:
+    store = str(row.get("店舗名", ""))
+    prev_rate = row.get("前月比")
+    drink_share = float(row.get("ドリンク比率", 0) or 0)
+    lunch_sales = float(row.get("ランチ売上", 0) or 0)
+    course_qty = float(row.get("コース販売数", 0) or 0)
+
+    notes: list[str] = []
+    if prev_rate is not None and not pd.isna(prev_rate):
+        if float(prev_rate) >= 0.05:
+            notes.append("売上伸長")
+        elif float(prev_rate) <= -0.05:
+            notes.append("売上注意")
+    if store == "神田店" and drink_share < 0.25:
+        notes.append("夜飲み導線確認")
+    if store == "東池袋店" and course_qty <= 0:
+        notes.append("コース育成余地")
+    if store == "飯田橋店" and course_qty > 0:
+        notes.append("宴会/安定運用確認")
+    if lunch_sales > 0:
+        notes.append("ランチ構成確認")
+    if not notes:
+        notes.append("詳細タブで確認")
+    return " / ".join(notes)
+
+
+def show_overview(products: pd.DataFrame, departments: pd.DataFrame, store_name: str, month: str, exclude_delivery: bool) -> None:
+    st.subheader("店舗別ダッシュボード")
+    st.caption("店舗ごとの状態を先に確認してから、部門・商品・コース・ランチの詳細へ進みます。")
+
+    st.markdown("#### 次に見る場所")
+    st.write("1. フード/ドリンク比を見る → 部門分析")
+    st.write("2. コースの中身を見る → コース分析")
+    st.write("3. ランチの中身を見る → ランチ分析")
+    st.write("4. 商品改善・POP候補を見る → 改善候補")
 
 
 def show_monthly_summary(store_summary: pd.DataFrame) -> None:
@@ -393,7 +454,7 @@ def show_course_analysis(products: pd.DataFrame, store_name: str, month: str, li
         "コース本体の販売数と、コース内で販売された商品点数を分けて確認します。"
         "「コース料理」はおつまみコースとして扱います。"
     )
-    st.info("おつまみコース・オコノミコースの基本5品はコース数量から加算します。3名以上時の「がんす」「鉄MIX」は月次集計だけでは判定できないため、自動加算していません。")
+    st.info("「コース内で販売された商品点数」は、商品名が【コース】で始まる商品のみを対象にしています。ブタシソ・ママカリなどの基本セット品はこの表には含めません。")
 
     course = course_analysis(products, store_name, month, exclude_delivery)
     summary = course["summary"]
