@@ -20,6 +20,15 @@ COURSE_SIDE_ITEMS = {
     "オコノミコース": ["広ナ", "ママカリ", "クラゲ", "ナス", "ブタシソ"],
     "季節宴会コース": ["広ナ", "ママカリ", "牡蠣オイル", "ナス", "ブタシソ"],
 }
+COURSE_COMPONENT_GROUPS = {
+    "Aグループ": ["スペシャルソバ", "スペシャルウドン", "特製ヤキソバ", "特製ヤキウドン"],
+    "Bグループ": ["イカ天ソバ　ネギ", "モチチーズソバ", "エビヤキソバ", "キムチヤキウドン", "トンペイチーズ"],
+}
+COURSE_COMPONENT_ORDER = {
+    product_name: (group_index, product_index)
+    for group_index, products in enumerate(COURSE_COMPONENT_GROUPS.values())
+    for product_index, product_name in enumerate(products)
+}
 DRINK_DEPARTMENT_KEYWORDS = (
     "ドリンク",
     "ビール",
@@ -217,6 +226,30 @@ def normalize_course_component_product(product_name: str) -> str:
     return name.strip()
 
 
+def course_component_sort_name(product_name: str) -> str:
+    name = str(product_name).strip()
+    return (
+        name.replace("（好）", "")
+        .replace("(好)", "")
+        .replace("（チーズ）", "チーズ")
+        .replace("(チーズ)", "チーズ")
+        .strip()
+    )
+
+
+def course_component_group(product_name: str) -> str:
+    product_name = course_component_sort_name(product_name)
+    for group_name, products in COURSE_COMPONENT_GROUPS.items():
+        if product_name in products:
+            return group_name
+    return "要確認"
+
+
+def course_component_order(product_name: str) -> tuple[int, int]:
+    product_name = course_component_sort_name(product_name)
+    return COURSE_COMPONENT_ORDER.get(product_name, (len(COURSE_COMPONENT_GROUPS), 999))
+
+
 def normalize_lunch_product(product_name: str) -> str:
     name = str(product_name).strip()
     for prefix in LUNCH_PREFIXES:
@@ -372,9 +405,16 @@ def course_analysis(products: pd.DataFrame, store_name: str, selected_month: str
             component_rows.groupby(["店舗名", "商品名", "部門名"], as_index=False)[["販売数量", "取引数"]]
             .sum()
             .rename(columns={"販売数量": "コース内販売数量"})
-            .sort_values("コース内販売数量", ascending=False)
-            .reset_index(drop=True)
         )
+        components["グループ"] = components["商品名"].map(course_component_group)
+        components[["_グループ順", "_商品順"]] = components["商品名"].apply(
+            lambda name: pd.Series(course_component_order(str(name)))
+        )
+        components["_店舗順"] = components["店舗名"].map(lambda name: STORE_NAMES.index(name) if name in STORE_NAMES else 999)
+        components = components.sort_values(
+            ["_店舗順", "_グループ順", "_商品順", "コース内販売数量"],
+            ascending=[True, True, True, False],
+        ).drop(columns=["_店舗順", "_グループ順", "_商品順"]).reset_index(drop=True)
         components["単品販売数量"] = 0.0
         components["全体販売数量"] = components["コース内販売数量"]
         components["商品分類メモ"] = "【コース】商品のみ"

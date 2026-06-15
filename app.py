@@ -692,10 +692,15 @@ def show_course_analysis(products: pd.DataFrame, store_name: str, month: str | N
 
     if not components.empty:
         st.markdown("#### コース内で販売された商品点数")
+        unknown_components = sorted(components.loc[components.get("グループ", "") == "要確認", "商品名"].dropna().astype(str).unique().tolist())
+        if unknown_components:
+            st.warning("指定順に未登録の【コース】商品があります。必要ならA/Bグループへ追加してください。")
+            st.write(" / ".join(unknown_components))
         _show_store_share_pies(components, "商品名", "コース内販売数量", "コース内販売点数構成比", limit=12)
         component_columns = [
             "順位",
             "店舗名",
+            "グループ",
             "商品名",
             "部門名",
             "コース内販売数量",
