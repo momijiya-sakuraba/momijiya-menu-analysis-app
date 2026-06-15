@@ -16,11 +16,15 @@ from utils.sheets import get_filter_options, get_spreadsheet_id, load_sales_data
 from utils.transform import (
     STORE_OPTIONS,
     abc_analysis,
+    course_analysis,
     department_analysis,
     exclude_delivery_rows,
+    food_drink_mix,
     improvement_candidates,
+    lunch_analysis,
     monthly_summary,
     product_top,
+    product_quantity_with_course,
     product_change_ranking,
     previous_month,
     previous_year_month,
@@ -83,7 +87,7 @@ def main() -> None:
 
     analysis = st.radio(
         "分析タブ",
-        ["概要", "月次サマリー", "部門分析", "商品TOP分析", "ABC分析", "前月比・前年比ランキング", "店舗間比較", "改善候補"],
+        ["概要", "月次サマリー", "部門分析", "商品TOP分析", "コース分析", "ランチ分析", "ABC分析", "前月比・前年比ランキング", "店舗間比較", "改善候補"],
         horizontal=True,
         label_visibility="collapsed",
     )
@@ -96,6 +100,10 @@ def main() -> None:
         show_department_analysis(sales_data.departments, store_name, month)
     elif analysis == "商品TOP分析":
         show_product_top(sales_data.products, store_name, month, display_limit, exclude_delivery)
+    elif analysis == "コース分析":
+        show_course_analysis(sales_data.products, store_name, month, display_limit, exclude_delivery)
+    elif analysis == "ランチ分析":
+        show_lunch_analysis(sales_data.products, store_name, month, display_limit, exclude_delivery)
     elif analysis == "ABC分析":
         show_abc_analysis(sales_data.products, store_name, month, display_limit, exclude_delivery)
     elif analysis == "前月比・前年比ランキング":
@@ -196,6 +204,29 @@ def show_department_analysis(departments: pd.DataFrame, store_name: str, month: 
         st.warning("選択条件の部門データがありません。")
         return
 
+    mix_data = food_drink_mix(departments, store_name, month)
+    st.markdown("#### フード/ドリンク比")
+    st.caption("まず店舗ごとのフード売上とドリンク売上の比率を確認します。ボトルとアイスは神田店のみ販売の商品として、商品分析側で注意表示します。")
+    if not mix_data["mix"].empty:
+        mix_display = add_display_formats(
+            mix_data["mix"],
+            {
+                "フード": "yen",
+                "ドリンク": "yen",
+                "合計純売上": "yen",
+                "フード比率": "share",
+                "ドリンク比率": "share",
+            },
+        )
+        st.dataframe(mix_display, use_container_width=True, hide_index=True)
+    if not mix_data["details"].empty:
+        with st.expander("フード内・ドリンク内の部門構成を見る", expanded=False):
+            detail_display = add_display_formats(
+                mix_data["details"],
+                {"純売上": "yen", "分類内構成比": "share"},
+            )
+            st.dataframe(detail_display, use_container_width=True, hide_index=True)
+
     chart_cols = st.columns(2)
     with chart_cols[0]:
         st.markdown("#### 部門別純売上")
@@ -242,7 +273,7 @@ def show_department_analysis(departments: pd.DataFrame, store_name: str, month: 
 def show_product_top(products: pd.DataFrame, store_name: str, month: str, limit: int, exclude_delivery: bool) -> None:
     st.subheader("商品TOP分析")
     delivery_note = "デリバリー売上は除外しています。" if exclude_delivery else "デリバリー売上も含めています。"
-    st.caption(f"全商品一覧は初期表示せず、売上・数量・平均単価のTOPだけを表示します。{delivery_note}")
+    st.caption(f"全商品一覧は初期表示せず、売上・数量・平均単価のTOPだけを表示します。売上TOPと平均単価TOPはランチ商品・コース内訳を除外します。{delivery_note}")
 
     scoped = products[products["集計月"] == month].copy()
     if store_name != "全店":
@@ -258,6 +289,20 @@ def show_product_top(products: pd.DataFrame, store_name: str, month: str, limit:
     specs = [("純売上", "純売上"), ("販売数量", "販売数量"), ("平均単価", "平均単価")]
     for tab, (label, sort_by) in zip(top_tabs, specs):
         with tab:
+            if sort_by == "販売数量":
+                top = product_quantity_with_course(products, store_name, month, limit, exclude_delivery)
+                if top.empty:
+                    st.warning("選択条件の商品データがありません。")
+                    continue
+                first = top.iloc[0]
+                st.write(
+                    f"1位: **{first['商品名']}** / 全体販売数量: **{format_number(first['全体販売数量'])}** "
+                    f"(単品 {format_number(first['単品販売数量'])} / コース内 {format_number(first['コース内販売数量'])})"
+                )
+                st.caption("販売数量は、通常の単品販売数に、コース内訳として確認できる数量と、コース本体から確実に推定できる基本セット品を加算しています。")
+                st.dataframe(_format_product_quantity_with_course(top), use_container_width=True, hide_index=True)
+                continue
+
             top = product_top(products, store_name, month, limit, sort_by, exclude_delivery)
             if top.empty:
                 st.warning("選択条件の商品データがありません。")
@@ -270,6 +315,98 @@ def show_product_top(products: pd.DataFrame, store_name: str, month: str, limit:
     with st.expander("確認用: 選択条件の商品データ先頭20件", expanded=False):
         preview = analysis_scope.head(20)
         st.dataframe(preview, use_container_width=True, hide_index=True)
+
+
+def show_course_analysis(products: pd.DataFrame, store_name: str, month: str, limit: int, exclude_delivery: bool) -> None:
+    st.subheader("コース分析")
+    st.caption(
+        "コース本体の販売数と、コース内で販売された商品点数を分けて確認します。"
+        "「コース料理」はおつまみコースとして扱います。"
+    )
+    st.info("おつまみコース・オコノミコースの基本5品はコース数量から加算します。3名以上時の「がんす」「鉄MIX」は月次集計だけでは判定できないため、自動加算していません。")
+
+    course = course_analysis(products, store_name, month, exclude_delivery)
+    summary = course["summary"]
+    components = course["components"]
+
+    if summary.empty and components.empty:
+        st.warning("選択条件のコースデータがありません。")
+        return
+
+    if not summary.empty:
+        st.markdown("#### コース本体")
+        summary_display = add_display_formats(
+            summary,
+            {"販売数量": "number", "純売上": "yen", "取引数": "number", "平均単価": "yen"},
+        )
+        st.dataframe(summary_display, use_container_width=True, hide_index=True)
+
+    if not components.empty:
+        st.markdown("#### コース内で販売された商品点数")
+        component_columns = [
+            "順位",
+            "店舗名",
+            "商品名",
+            "部門名",
+            "コース内販売数量",
+            "単品販売数量",
+            "全体販売数量",
+            "商品分類メモ",
+        ]
+        component_display = add_display_formats(
+            components[[column for column in component_columns if column in components.columns]].head(limit),
+            {"コース内販売数量": "number", "単品販売数量": "number", "全体販売数量": "number"},
+        )
+        st.dataframe(component_display, use_container_width=True, hide_index=True)
+
+
+def show_lunch_analysis(products: pd.DataFrame, store_name: str, month: str, limit: int, exclude_delivery: bool) -> None:
+    st.subheader("ランチ分析")
+    st.caption("【ランチ】系の商品だけを抜き出し、ランチ内で何が売れているかを確認します。通常商品TOPやABCからはランチ商品を外しています。")
+    st.info("ランチ時間帯に売れた通常商品やドリンクは、商品名だけでは判定できないためこの表には含めていません。まずは【ランチ】系商品の構成比を優先して確認します。")
+
+    lunch = lunch_analysis(products, store_name, month, exclude_delivery)
+    summary = lunch["summary"]
+    items = lunch["items"]
+
+    if summary.empty and items.empty:
+        st.warning("選択条件のランチデータがありません。")
+        return
+
+    if not summary.empty:
+        st.markdown("#### ランチ売上サマリー")
+        summary_display = add_display_formats(
+            summary,
+            {"販売数量": "number", "純売上": "yen", "取引数": "number", "平均単価": "yen"},
+        )
+        st.dataframe(summary_display, use_container_width=True, hide_index=True)
+
+    if not items.empty:
+        st.markdown("#### ランチ内構成比")
+        item_columns = [
+            "店舗名",
+            "ランチ商品名",
+            "販売数量",
+            "純売上",
+            "ランチ内構成比",
+            "平均単価",
+            "大盛り数量",
+            "TO数量",
+            "取引数",
+        ]
+        item_display = add_display_formats(
+            items[[column for column in item_columns if column in items.columns]].head(limit),
+            {
+                "販売数量": "number",
+                "純売上": "yen",
+                "ランチ内構成比": "share",
+                "平均単価": "yen",
+                "大盛り数量": "number",
+                "TO数量": "number",
+                "取引数": "number",
+            },
+        )
+        st.dataframe(item_display, use_container_width=True, hide_index=True)
 
 
 def show_abc_analysis(products: pd.DataFrame, store_name: str, month: str, limit: int, exclude_delivery: bool) -> None:
@@ -501,6 +638,36 @@ def _show_candidate_table(dataframe: pd.DataFrame, columns: list[str]) -> None:
         },
     )
     st.dataframe(display, use_container_width=True, hide_index=True)
+
+
+def _format_product_quantity_with_course(dataframe: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "順位",
+        "店舗名",
+        "商品名",
+        "部門名",
+        "単品販売数量",
+        "コース内販売数量",
+        "全体販売数量",
+        "純売上",
+        "平均単価",
+        "数量構成比",
+        "取引数",
+        "商品分類メモ",
+    ]
+    available_columns = [column for column in columns if column in dataframe.columns]
+    return add_display_formats(
+        dataframe[available_columns],
+        {
+            "単品販売数量": "number",
+            "コース内販売数量": "number",
+            "全体販売数量": "number",
+            "純売上": "yen",
+            "平均単価": "yen",
+            "数量構成比": "share",
+            "取引数": "number",
+        },
+    )
 
 
 def _format_product_top(dataframe: pd.DataFrame) -> pd.DataFrame:

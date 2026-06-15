@@ -9,6 +9,33 @@ from .metrics import average_price, change_amount, change_rate
 CACHE_TTL_SECONDS = 21600
 STORE_OPTIONS = ["全店", "飯田橋店", "神田店", "東池袋店"]
 DELIVERY_KEYWORDS = ["デリバリー", "ubereats", "uber eats", "出前館", "wolt"]
+STORE_NAMES = ["飯田橋店", "神田店", "東池袋店"]
+COURSE_COMPONENT_PREFIX = "【コース】"
+LUNCH_PREFIXES = ("【ランチ】", "【ランチTO】", "【TOランチ】")
+TAKEOUT_PREFIX = "【TO】"
+LIMITED_ITEM_KEYWORDS = ("アスパラ",)
+KANDA_ONLY_KEYWORDS = ("ボトル", "アイス")
+COURSE_SIDE_ITEMS = {
+    "おつまみコース": ["広ナ", "ママカリ", "クラゲ", "ナス", "ブタシソ"],
+    "オコノミコース": ["広ナ", "ママカリ", "クラゲ", "ナス", "ブタシソ"],
+    "季節宴会コース": ["広ナ", "ママカリ", "牡蠣オイル", "ナス", "ブタシソ"],
+}
+DRINK_DEPARTMENT_KEYWORDS = (
+    "ドリンク",
+    "ビール",
+    "サワー",
+    "ハイボール",
+    "焼酎",
+    "日本酒",
+    "ウイスキー",
+    "ワイン",
+    "梅酒",
+    "果実酒",
+    "ホッピー",
+    "飲み放題",
+    "アルコール",
+    "ソフト",
+)
 
 
 def previous_month(month: str) -> str:
@@ -137,6 +164,7 @@ def product_top(
     current = filter_by_store_month(products, store_name, selected_month)
     if exclude_delivery:
         current = exclude_delivery_rows(current)
+    current = _non_lunch_non_course_rows(current)
     if current.empty:
         return pd.DataFrame()
 
@@ -150,6 +178,261 @@ def product_top(
     grouped = grouped.sort_values(sort_by, ascending=False).head(limit).reset_index(drop=True)
     grouped.insert(0, "順位", grouped.index + 1)
     return grouped
+
+
+def is_course_component_name(product_name: str) -> bool:
+    return str(product_name).strip().startswith(COURSE_COMPONENT_PREFIX)
+
+
+def is_lunch_product_name(product_name: str) -> bool:
+    name = str(product_name).strip()
+    return name.startswith(LUNCH_PREFIXES)
+
+
+def normalize_course_name(product_name: str) -> str | None:
+    name = str(product_name).strip()
+    if not name or is_course_component_name(name):
+        return None
+    if name == "コース料理":
+        return "おつまみコース"
+    if "おつまみコース" in name:
+        return "おつまみコース"
+    if "オコノミコース" in name:
+        return "オコノミコース"
+    if any(keyword in name for keyword in ("忘年会コース", "新年会コース", "歓送迎会コース")):
+        return "季節宴会コース"
+    if "貸切コース" in name:
+        return "貸切コース"
+    return None
+
+
+def normalize_course_component_product(product_name: str) -> str:
+    name = str(product_name).strip()
+    if name.startswith(COURSE_COMPONENT_PREFIX):
+        name = name[len(COURSE_COMPONENT_PREFIX) :]
+    return name.strip()
+
+
+def normalize_lunch_product(product_name: str) -> str:
+    name = str(product_name).strip()
+    for prefix in LUNCH_PREFIXES:
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    name = name.replace("（大）", "").replace("(大)", "").strip()
+    return name
+
+
+def product_flag_note(product_name: str, store_name: str = "") -> str:
+    name = str(product_name)
+    notes: list[str] = []
+    if any(keyword in name for keyword in LIMITED_ITEM_KEYWORDS):
+        notes.append("期間限定確認")
+    if any(keyword in name for keyword in KANDA_ONLY_KEYWORDS):
+        notes.append("神田店のみ販売")
+    if is_course_component_name(name):
+        notes.append("コース内訳")
+    if is_lunch_product_name(name):
+        notes.append("ランチ")
+    if store_name and store_name != "神田店" and any(keyword in name for keyword in KANDA_ONLY_KEYWORDS):
+        notes.append("店舗確認")
+    return " / ".join(dict.fromkeys(notes))
+
+
+def _non_lunch_non_course_rows(dataframe: pd.DataFrame) -> pd.DataFrame:
+    if dataframe.empty or "商品名" not in dataframe:
+        return dataframe.copy()
+    names = dataframe["商品名"].astype(str)
+    mask = ~names.map(is_course_component_name) & ~names.map(is_lunch_product_name)
+    return dataframe.loc[mask].copy()
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def product_quantity_with_course(
+    products: pd.DataFrame,
+    store_name: str,
+    selected_month: str,
+    limit: int,
+    exclude_delivery: bool = True,
+) -> pd.DataFrame:
+    current = filter_by_store_month(products, store_name, selected_month)
+    if exclude_delivery:
+        current = exclude_delivery_rows(current)
+    if current.empty:
+        return pd.DataFrame()
+
+    rows: list[dict[str, object]] = []
+    for _, row in current.iterrows():
+        product_name = str(row.get("商品名", ""))
+        department_name = str(row.get("部門名", ""))
+        quantity = float(row.get("販売数量", 0) or 0)
+        sales = float(row.get("純売上", 0) or 0)
+        transactions = float(row.get("取引数", 0) or 0)
+        store = str(row.get("店舗名", ""))
+        if is_lunch_product_name(product_name):
+            continue
+        if is_course_component_name(product_name):
+            rows.append(
+                {
+                    "店舗名": store,
+                    "商品名": normalize_course_component_product(product_name),
+                    "部門名": department_name,
+                    "単品販売数量": 0.0,
+                    "コース内販売数量": quantity,
+                    "純売上": 0.0,
+                    "取引数": 0.0,
+                    "商品分類メモ": product_flag_note(product_name, store),
+                }
+            )
+            continue
+
+        course_name = normalize_course_name(product_name)
+        if course_name in COURSE_SIDE_ITEMS:
+            for side_item in COURSE_SIDE_ITEMS[course_name]:
+                rows.append(
+                    {
+                        "店舗名": store,
+                        "商品名": side_item,
+                        "部門名": "コース内訳",
+                        "単品販売数量": 0.0,
+                        "コース内販売数量": quantity,
+                        "純売上": 0.0,
+                        "取引数": 0.0,
+                        "商品分類メモ": f"{course_name}から加算",
+                    }
+                )
+
+        rows.append(
+            {
+                "店舗名": store,
+                "商品名": product_name,
+                "部門名": department_name,
+                "単品販売数量": quantity,
+                "コース内販売数量": 0.0,
+                "純売上": sales,
+                "取引数": transactions,
+                "商品分類メモ": product_flag_note(product_name, store),
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame()
+
+    expanded = pd.DataFrame(rows)
+    grouped = (
+        expanded.groupby(["店舗名", "商品名"], as_index=False)
+        .agg(
+            部門名=("部門名", "first"),
+            単品販売数量=("単品販売数量", "sum"),
+            コース内販売数量=("コース内販売数量", "sum"),
+            純売上=("純売上", "sum"),
+            取引数=("取引数", "sum"),
+            商品分類メモ=("商品分類メモ", lambda values: " / ".join([v for v in dict.fromkeys(values) if v])),
+        )
+        .copy()
+    )
+    grouped["全体販売数量"] = grouped["単品販売数量"] + grouped["コース内販売数量"]
+    grouped["平均単価"] = grouped.apply(lambda row: average_price(row["純売上"], row["単品販売数量"]), axis=1)
+    total_quantity = grouped["全体販売数量"].sum()
+    grouped["数量構成比"] = grouped["全体販売数量"] / total_quantity if total_quantity else 0
+    grouped = grouped.sort_values("全体販売数量", ascending=False).head(limit).reset_index(drop=True)
+    grouped.insert(0, "順位", grouped.index + 1)
+    return grouped
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def course_analysis(products: pd.DataFrame, store_name: str, selected_month: str, exclude_delivery: bool = True) -> dict[str, pd.DataFrame]:
+    current = filter_by_store_month(products, store_name, selected_month)
+    if exclude_delivery:
+        current = exclude_delivery_rows(current)
+    if current.empty:
+        return {"summary": pd.DataFrame(), "components": pd.DataFrame()}
+
+    base = current.copy()
+    base["コース区分"] = base["商品名"].map(normalize_course_name)
+    course_rows = base[base["コース区分"].notna()].copy()
+    summary = pd.DataFrame()
+    if not course_rows.empty:
+        summary = (
+            course_rows.groupby(["店舗名", "コース区分"], as_index=False)[["販売数量", "純売上", "取引数"]]
+            .sum()
+            .sort_values("販売数量", ascending=False)
+        )
+        summary["平均単価"] = summary.apply(lambda row: average_price(row["純売上"], row["販売数量"]), axis=1)
+
+    components = product_quantity_with_course(products, store_name, selected_month, 100000, exclude_delivery)
+    if not components.empty:
+        components = components[components["コース内販売数量"] > 0].copy()
+        components = components.sort_values("コース内販売数量", ascending=False)
+    return {"summary": summary, "components": components}
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def lunch_analysis(products: pd.DataFrame, store_name: str, selected_month: str, exclude_delivery: bool = True) -> dict[str, pd.DataFrame]:
+    current = filter_by_store_month(products, store_name, selected_month)
+    if exclude_delivery:
+        current = exclude_delivery_rows(current)
+    if current.empty or "商品名" not in current:
+        return {"summary": pd.DataFrame(), "items": pd.DataFrame()}
+
+    lunch = current[current["商品名"].astype(str).map(is_lunch_product_name)].copy()
+    if lunch.empty:
+        return {"summary": pd.DataFrame(), "items": pd.DataFrame()}
+    lunch["ランチ商品名"] = lunch["商品名"].map(normalize_lunch_product)
+    lunch["大盛りフラグ"] = lunch["商品名"].astype(str).str.contains("（大）|\\(大\\)", regex=True, na=False)
+    lunch["TOフラグ"] = lunch["商品名"].astype(str).str.contains("TO", na=False)
+
+    summary = (
+        lunch.groupby("店舗名", as_index=False)[["販売数量", "純売上", "取引数"]]
+        .sum()
+        .sort_values("純売上", ascending=False)
+    )
+    summary["平均単価"] = summary.apply(lambda row: average_price(row["純売上"], row["販売数量"]), axis=1)
+
+    items = (
+        lunch.groupby(["店舗名", "ランチ商品名"], as_index=False)
+        .agg(
+            販売数量=("販売数量", "sum"),
+            純売上=("純売上", "sum"),
+            取引数=("取引数", "sum"),
+            大盛り数量=("販売数量", lambda values: float(values[lunch.loc[values.index, "大盛りフラグ"]].sum())),
+            TO数量=("販売数量", lambda values: float(values[lunch.loc[values.index, "TOフラグ"]].sum())),
+        )
+    )
+    items["平均単価"] = items.apply(lambda row: average_price(row["純売上"], row["販売数量"]), axis=1)
+    totals = items.groupby("店舗名")["純売上"].transform("sum")
+    items["ランチ内構成比"] = items["純売上"] / totals.where(totals != 0, 1)
+    items = items.sort_values("純売上", ascending=False)
+    return {"summary": summary, "items": items}
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def food_drink_mix(departments: pd.DataFrame, store_name: str, selected_month: str) -> dict[str, pd.DataFrame]:
+    current = filter_by_store_month(departments, store_name, selected_month)
+    if current.empty:
+        return {"mix": pd.DataFrame(), "details": pd.DataFrame()}
+    current = current.copy()
+    current["大分類"] = current["部門名"].astype(str).map(_food_drink_group)
+    grouped = current.groupby(["店舗名", "大分類"], as_index=False)["純売上"].sum()
+    pivot = grouped.pivot_table(index="店舗名", columns="大分類", values="純売上", aggfunc="sum", fill_value=0).reset_index()
+    for column in ["フード", "ドリンク"]:
+        if column not in pivot.columns:
+            pivot[column] = 0.0
+    pivot["合計純売上"] = pivot["フード"] + pivot["ドリンク"]
+    pivot["フード比率"] = pivot["フード"] / pivot["合計純売上"].where(pivot["合計純売上"] != 0, 1)
+    pivot["ドリンク比率"] = pivot["ドリンク"] / pivot["合計純売上"].where(pivot["合計純売上"] != 0, 1)
+    details = current.groupby(["店舗名", "大分類", "部門名"], as_index=False)["純売上"].sum()
+    totals = details.groupby(["店舗名", "大分類"])["純売上"].transform("sum")
+    details["分類内構成比"] = details["純売上"] / totals.where(totals != 0, 1)
+    details = details.sort_values(["店舗名", "大分類", "純売上"], ascending=[True, True, False])
+    return {"mix": pivot.sort_values("合計純売上", ascending=False), "details": details}
+
+
+def _food_drink_group(department_name: str) -> str:
+    name = str(department_name)
+    if any(keyword in name for keyword in DRINK_DEPARTMENT_KEYWORDS):
+        return "ドリンク"
+    return "フード"
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
@@ -201,6 +484,7 @@ def store_product_comparison(products: pd.DataFrame, selected_month: str, exclud
     current = products[products["集計月"] == selected_month].copy()
     if exclude_delivery:
         current = exclude_delivery_rows(current)
+    current = _non_lunch_non_course_rows(current)
     if current.empty:
         return pd.DataFrame()
 
@@ -286,6 +570,7 @@ def _product_totals_for_month(
     current = filter_by_store_month(products, store_name, month)
     if exclude_delivery:
         current = exclude_delivery_rows(current)
+    current = _non_lunch_non_course_rows(current)
     if current.empty:
         return pd.DataFrame(columns=["店舗名", "商品名", "部門名", "販売数量", "純売上", "取引数"])
     return current.groupby(["店舗名", "商品名", "部門名"], as_index=False)[["販売数量", "純売上", "取引数"]].sum()
