@@ -28,7 +28,14 @@ def product_top_bar(dataframe: pd.DataFrame, value_column: str) -> None:
     st.bar_chart(chart_data)
 
 
-def pie_chart(dataframe: pd.DataFrame, label_column: str, value_column: str, title: str = "") -> None:
+def pie_chart(
+    dataframe: pd.DataFrame,
+    label_column: str,
+    value_column: str,
+    title: str = "",
+    color_domain: list[str] | None = None,
+    color_range: list[str] | None = None,
+) -> None:
     if dataframe.empty or label_column not in dataframe or value_column not in dataframe:
         st.info("表示できる構成比データがありません。")
         return
@@ -40,15 +47,19 @@ def pie_chart(dataframe: pd.DataFrame, label_column: str, value_column: str, tit
         st.info("表示できる構成比データがありません。")
         return
 
+    color_encoding = {
+        "field": label_column,
+        "type": "nominal",
+        "legend": {"orient": "bottom", "columns": 2, "labelLimit": 220},
+    }
+    if color_domain and color_range:
+        color_encoding["scale"] = {"domain": color_domain, "range": color_range}
+
     spec = {
         "mark": {"type": "arc", "outerRadius": 90, "stroke": "#111827", "strokeWidth": 1},
         "encoding": {
             "theta": {"field": value_column, "type": "quantitative"},
-            "color": {
-                "field": label_column,
-                "type": "nominal",
-                "legend": {"orient": "bottom", "columns": 2, "labelLimit": 220},
-            },
+            "color": color_encoding,
             "tooltip": [
                 {"field": label_column, "type": "nominal", "title": label_column},
                 {"field": value_column, "type": "quantitative", "title": value_column, "format": ",.0f"},
@@ -62,7 +73,15 @@ def pie_chart(dataframe: pd.DataFrame, label_column: str, value_column: str, tit
     st.vega_lite_chart(chart_data, spec, use_container_width=True)
 
 
-def top_share_pie(dataframe: pd.DataFrame, label_column: str, value_column: str, limit: int = 8, title: str = "") -> None:
+def top_share_pie(
+    dataframe: pd.DataFrame,
+    label_column: str,
+    value_column: str,
+    limit: int = 8,
+    title: str = "",
+    color_domain: list[str] | None = None,
+    color_range: list[str] | None = None,
+) -> None:
     if dataframe.empty or label_column not in dataframe or value_column not in dataframe:
         st.info("表示できる構成比データがありません。")
         return
@@ -81,4 +100,4 @@ def top_share_pie(dataframe: pd.DataFrame, label_column: str, value_column: str,
             [top, pd.DataFrame([{label_column: "その他", value_column: other_value}])],
             ignore_index=True,
         )
-    pie_chart(top, label_column, value_column, title)
+    pie_chart(top, label_column, value_column, title, color_domain=color_domain, color_range=color_range)

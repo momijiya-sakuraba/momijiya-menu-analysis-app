@@ -35,6 +35,48 @@ from utils.transform import (
 
 st.set_page_config(page_title="商品・部門分析アプリ", page_icon="M", layout="wide")
 STORE_DISPLAY_ORDER = ["飯田橋店", "神田店", "東池袋店"]
+DEPARTMENT_DISPLAY_ORDER = [
+    "お好み焼",
+    "TOお好み焼",
+    "鉄板焼",
+    "TO鉄板焼",
+    "おつまみ",
+    "TOおつまみ",
+    "焼ソバ・焼ウドン",
+    "TO焼ソバ・焼ウドン",
+    "トッピング",
+    "TOトッピング",
+    "コース",
+    "デザート",
+    "ビール",
+    "ハイボール（ウイスキー）",
+    "サワー・焼酎",
+    "果実酒",
+    "ノンアルコール",
+    "ソフトドリンク",
+    "その他・要確認",
+]
+DEPARTMENT_COLORS = {
+    "お好み焼": "#2E7D32",
+    "TOお好み焼": "#81C784",
+    "鉄板焼": "#00897B",
+    "TO鉄板焼": "#80CBC4",
+    "おつまみ": "#F9A825",
+    "TOおつまみ": "#FFE082",
+    "焼ソバ・焼ウドン": "#EF6C00",
+    "TO焼ソバ・焼ウドン": "#FFB74D",
+    "トッピング": "#6D4C41",
+    "TOトッピング": "#BCAAA4",
+    "コース": "#C62828",
+    "デザート": "#AD1457",
+    "ビール": "#1565C0",
+    "ハイボール（ウイスキー）": "#5E35B1",
+    "サワー・焼酎": "#039BE5",
+    "果実酒": "#8E24AA",
+    "ノンアルコール": "#26A69A",
+    "ソフトドリンク": "#64B5F6",
+    "その他・要確認": "#9E9E9E",
+}
 
 
 def main() -> None:
@@ -187,6 +229,73 @@ def _sort_by_store(dataframe: pd.DataFrame) -> pd.DataFrame:
     sorted_data["_store_order"] = sorted_data["店舗名"].map(_store_order_value)
     sorted_data = sorted_data.sort_values(["_store_order", "純売上"] if "純売上" in sorted_data else ["_store_order"], ascending=[True, False] if "純売上" in sorted_data else True)
     return sorted_data.drop(columns=["_store_order"])
+
+
+def _department_display_name(department_name: str) -> str:
+    name = str(department_name).replace("【ＴＯ】", "【TO】").strip()
+    normalized = name.replace("焼きそば", "焼ソバ").replace("焼そば", "焼ソバ").replace("焼きうどん", "焼ウドン").replace("焼うどん", "焼ウドン")
+    is_to = "【TO】" in normalized or normalized.startswith("TO") or "テイクアウト" in normalized
+
+    if "お好み焼" in normalized:
+        return "TOお好み焼" if is_to else "お好み焼"
+    if "鉄板焼" in normalized:
+        return "TO鉄板焼" if is_to else "鉄板焼"
+    if "おつまみ" in normalized or "とんぺい" in normalized:
+        return "TOおつまみ" if is_to else "おつまみ"
+    if "焼ソバ" in normalized or "焼ウドン" in normalized:
+        return "TO焼ソバ・焼ウドン" if is_to else "焼ソバ・焼ウドン"
+    if "トッピング" in normalized:
+        return "TOトッピング" if is_to else "トッピング"
+    if "コース" in normalized:
+        return "コース"
+    if "デザート" in normalized:
+        return "デザート"
+    if "ビール" in normalized:
+        return "ビール"
+    if "ハイボール" in normalized or "ウイスキー" in normalized:
+        return "ハイボール（ウイスキー）"
+    if "サワー" in normalized or "焼酎" in normalized:
+        return "サワー・焼酎"
+    if "果実酒" in normalized:
+        return "果実酒"
+    if "ノンアル" in normalized:
+        return "ノンアルコール"
+    if "ソフトドリンク" in normalized or normalized == "ソフト":
+        return "ソフトドリンク"
+    return "その他・要確認"
+
+
+def _department_order_value(department_name: str) -> int:
+    try:
+        return DEPARTMENT_DISPLAY_ORDER.index(str(department_name))
+    except ValueError:
+        return len(DEPARTMENT_DISPLAY_ORDER)
+
+
+def _department_color_domain() -> list[str]:
+    return DEPARTMENT_DISPLAY_ORDER
+
+
+def _department_color_range() -> list[str]:
+    return [DEPARTMENT_COLORS[name] for name in DEPARTMENT_DISPLAY_ORDER]
+
+
+def _department_missing_names(department: pd.DataFrame) -> list[str]:
+    if department.empty:
+        return []
+    raw = department[["部門名"]].drop_duplicates().copy()
+    raw["表示部門名"] = raw["部門名"].map(_department_display_name)
+    missing = raw[raw["表示部門名"] == "その他・要確認"]["部門名"].dropna().astype(str).unique().tolist()
+    return sorted(missing)
+
+
+def _sort_department_table(department: pd.DataFrame) -> pd.DataFrame:
+    sorted_data = department.copy()
+    sorted_data["表示部門名"] = sorted_data["部門名"].map(_department_display_name)
+    sorted_data["_store_order"] = sorted_data["店舗名"].map(_store_order_value)
+    sorted_data["_department_order"] = sorted_data["表示部門名"].map(_department_order_value)
+    sorted_data = sorted_data.sort_values(["_store_order", "_department_order", "純売上"], ascending=[True, True, False])
+    return sorted_data.drop(columns=["_store_order", "_department_order"])
 
 
 def _period_store_summary(departments: pd.DataFrame, period_label: str) -> pd.DataFrame:
@@ -418,6 +527,10 @@ def show_department_analysis(departments: pd.DataFrame, store_name: str, month: 
     st.markdown("#### 店舗別の部門別純売上・構成比")
     st.caption("全店合算ではなく、店舗ごとに部門別純売上と構成比を確認します。")
     _show_department_store_sections(department)
+    missing_departments = _department_missing_names(department)
+    if missing_departments:
+        with st.expander("指定順に未分類の部門を見る", expanded=False):
+            st.write(" / ".join(missing_departments))
 
     st.markdown("#### 確認ポイント")
     top_department = department.iloc[0]
@@ -427,10 +540,11 @@ def show_department_analysis(departments: pd.DataFrame, store_name: str, month: 
     )
 
     display = add_display_formats(
-        department.sort_values(["店舗名", "純売上"], ascending=[True, False])[
+        _sort_department_table(department)[
             [
                 "集計月",
                 "店舗名",
+                "表示部門名",
                 "部門名",
                 "販売数量",
                 "純売上",
@@ -777,7 +891,14 @@ def _show_food_drink_store_pies(mix: pd.DataFrame) -> None:
                 {"分類": "ドリンク", "純売上": float(row.get("ドリンク", 0) or 0)},
             ]
         )
-        pie_chart(chart_data, "分類", "純売上", f"{row['店舗名']}")
+        pie_chart(
+            chart_data,
+            "分類",
+            "純売上",
+            f"{row['店舗名']}",
+            color_domain=["フード", "ドリンク"],
+            color_range=["#F9A825", "#1565C0"],
+        )
         st.caption(
             f"フード {format_share(row.get('フード比率', 0))} / "
             f"ドリンク {format_share(row.get('ドリンク比率', 0))}"
@@ -823,18 +944,57 @@ def _show_store_share_pies(
 def _show_department_store_sections(department: pd.DataFrame) -> None:
     if department.empty:
         return
-    grouped = department.groupby(["店舗名", "部門名"], as_index=False)["純売上"].sum()
+    chart_source = department.copy()
+    chart_source["表示部門名"] = chart_source["部門名"].map(_department_display_name)
+    grouped = chart_source.groupby(["店舗名", "表示部門名"], as_index=False)["純売上"].sum()
+    grouped["_department_order"] = grouped["表示部門名"].map(_department_order_value)
     stores = sorted(grouped["店舗名"].dropna().astype(str).unique().tolist(), key=_store_order_value)
     for store in stores:
-        store_data = grouped[grouped["店舗名"] == store].sort_values("純売上", ascending=False)
+        store_data = grouped[grouped["店舗名"] == store].sort_values("_department_order", ascending=True)
         st.markdown(f"##### {store}")
         st.markdown("純売上")
-        st.bar_chart(store_data.set_index("部門名")["純売上"].sort_values(ascending=True))
+        _department_sales_chart(store_data)
         st.markdown("構成比")
-        top_share_pie(store_data, "部門名", "純売上", limit=12, title=f"{store} 部門別構成比")
-        if len(store_data) > 12:
-            other_value = store_data.iloc[12:]["純売上"].sum()
-            st.caption(f"「その他」は13位以下の部門合計です: {format_yen(other_value)}")
+        pie_chart(
+            store_data,
+            "表示部門名",
+            "純売上",
+            title=f"{store} 部門別構成比",
+            color_domain=_department_color_domain(),
+            color_range=_department_color_range(),
+        )
+
+
+def _department_sales_chart(store_data: pd.DataFrame) -> None:
+    if store_data.empty:
+        st.info("表示できる部門データがありません。")
+        return
+    chart_data = store_data[store_data["純売上"] > 0].copy()
+    spec = {
+        "mark": {"type": "bar", "cornerRadiusEnd": 3},
+        "encoding": {
+            "y": {
+                "field": "表示部門名",
+                "type": "nominal",
+                "sort": DEPARTMENT_DISPLAY_ORDER,
+                "axis": {"title": None, "labelLimit": 180},
+            },
+            "x": {"field": "純売上", "type": "quantitative", "axis": {"title": None, "format": ",.0f"}},
+            "color": {
+                "field": "表示部門名",
+                "type": "nominal",
+                "scale": {"domain": _department_color_domain(), "range": _department_color_range()},
+                "legend": None,
+            },
+            "tooltip": [
+                {"field": "表示部門名", "type": "nominal", "title": "部門"},
+                {"field": "純売上", "type": "quantitative", "title": "純売上", "format": ",.0f"},
+            ],
+        },
+        "height": max(280, len(chart_data) * 24),
+        "view": {"stroke": None},
+    }
+    st.vega_lite_chart(chart_data, spec, use_container_width=True)
 
 
 def _show_store_product_table(dataframe: pd.DataFrame) -> None:
