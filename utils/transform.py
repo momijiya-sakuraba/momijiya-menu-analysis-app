@@ -21,7 +21,14 @@ COURSE_SIDE_ITEMS = {
     "季節宴会コース": ["広ナ", "ママカリ", "牡蠣オイル", "ナス", "ブタシソ"],
 }
 COURSE_COMPONENT_GROUPS = {
-    "Aグループ": ["スペシャルソバ", "スペシャルウドン", "特製ヤキソバ", "特製ヤキウドン"],
+    "Aグループ": [
+        "スペシャルソバ",
+        "スペシャルウドン",
+        "スペシャルヤキソバ",
+        "スペシャルヤキウドン",
+        "特製ヤキソバ",
+        "特製ヤキウドン",
+    ],
     "Bグループ": [
         "イカ天ソバ　ネギ",
         "イカ天ウドン　ネギ",
@@ -31,7 +38,19 @@ COURSE_COMPONENT_GROUPS = {
         "エビヤキウドン",
         "キムチヤキウドン",
         "トンペイチーズ",
+        "肉玉イカ天ソバ　ネギ",
+        "肉玉イカ天ウドン　ネギ",
+        "肉玉モチチーズソバ",
+        "肉玉モチチーズウドン",
     ],
+}
+COURSE_LEGACY_COMPONENT_NAMES = {
+    "スペシャルヤキウドン",
+    "スペシャルヤキソバ",
+    "肉玉イカ天ウドン　ネギ",
+    "肉玉イカ天ソバ　ネギ",
+    "肉玉モチチーズウドン",
+    "肉玉モチチーズソバ",
 }
 COURSE_COMPONENT_ORDER = {
     product_name: (group_index, product_index)
@@ -406,7 +425,14 @@ def course_analysis(products: pd.DataFrame, store_name: str, selected_month: str
         )
         summary["平均単価"] = summary.apply(lambda row: average_price(row["純売上"], row["販売数量"]), axis=1)
 
-    component_rows = current[current["商品名"].astype(str).map(is_course_component_name)].copy()
+    product_names = current["商品名"].astype(str)
+    normalized_component_names = product_names.map(normalize_course_component_product)
+    department_names = current.get("部門名", pd.Series("", index=current.index)).astype(str)
+    sales_values = pd.to_numeric(current.get("純売上", pd.Series(0, index=current.index)), errors="coerce").fillna(0)
+    legacy_component_mask = normalized_component_names.isin(COURSE_LEGACY_COMPONENT_NAMES) & (
+        department_names.str.contains("コース", na=False) | sales_values.eq(0)
+    )
+    component_rows = current[product_names.map(is_course_component_name) | legacy_component_mask].copy()
     components = pd.DataFrame()
     if not component_rows.empty:
         component_rows["商品名"] = component_rows["商品名"].map(normalize_course_component_product)
